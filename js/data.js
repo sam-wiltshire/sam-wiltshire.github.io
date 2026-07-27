@@ -100,6 +100,7 @@ LM.THEMES = {
     grid: "rgba(90,120,150,0.22)",
     colors: { large: "#c3d3dd", medium: "#a9c0cd", small: "#e6eef2", barricade: "#b7cbd6" },
     scatter: { base: "#eef4f7", accent: "#9fb9c8", variant: "ice" },
+    ground: "ice",
     building: { insetFrac: 0.82, topFrac: 0.4 },
   },
   endor: {
@@ -110,6 +111,7 @@ LM.THEMES = {
     grid: "rgba(20,30,15,0.28)",
     colors: { large: "#6c5a42", medium: "#5c6e49", small: "#7a6547", barricade: "#4d3f2c" },
     scatter: { base: "#5b4630", accent: "#5c7a45", variant: "forest" },
+    ground: "forestFloor",
     building: { insetFrac: 0.62, topFrac: 0.55 },
   },
   naboo: {
@@ -120,6 +122,7 @@ LM.THEMES = {
     grid: "rgba(110,95,55,0.25)",
     colors: { large: "#e7ddc4", medium: "#dccfa9", small: "#cabf95", barricade: "#d1c8a6" },
     scatter: { base: "#cdc2a0", accent: "#5f8a4f", variant: "ruins" },
+    ground: "paving",
     building: { insetFrac: 0.55, topFrac: 0.62 },
   },
   tatooine: {
@@ -130,6 +133,7 @@ LM.THEMES = {
     grid: "rgba(120,85,35,0.22)",
     colors: { large: "#c99a5b", medium: "#b78a4f", small: "#a97d45", barricade: "#9c8054" },
     scatter: { base: "#8a6a3f", accent: "#c2985e", variant: "desert" },
+    ground: "sand",
     building: { insetFrac: 0.68, topFrac: 0.5 },
   },
 };
