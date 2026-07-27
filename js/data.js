@@ -139,9 +139,10 @@ LM.DEFAULT_THEME = "tatooine";
 // ---------------------------------------------------------------------------
 // Tables & suggested terrain quantities
 //
-// AMG's tournament guidance (via community table-building guides, not the core rulebook)
-// targets 25%-35% board coverage. The suggested counts below are tuned to land in that
-// band using the user's actual terrain footprints above.
+// Community table-building guides cite 25%-35% as a tournament-max ceiling, but that's
+// noticeably denser than a normal recommended table — the counts below (piece counts
+// pulled from an actual reference layout) land more like 19-23% coverage in practice,
+// which is what the app's own coverage target reflects (see main.js).
 // A suggested count is either a fixed number or a {min,max} range (resolved to a random
 // concrete number once per generated layout — see generator.js's resolveSuggestedCounts).
 LM.TABLES = {

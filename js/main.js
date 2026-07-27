@@ -143,11 +143,13 @@
       }
       html += `<div class="coverage-row"><span>${cat.label} <span class="n">(${p.available} owned / ${p.suggested} suggested)</span></span>${pill}${extra}</div>`;
     }
+    // Target reflects what the (now lower) suggested counts actually produce — roughly
+    // 19-23% at full suggested amounts — not the old, higher tournament-max guideline.
     const pct = Math.round(coveragePct);
-    const barPct = Math.min(100, (pct / 35) * 100);
-    const barColor = pct < 20 ? "var(--bad)" : pct > 35 ? "var(--warn)" : "var(--good)";
+    const barPct = Math.min(100, (pct / 30) * 100);
+    const barColor = pct < 12 ? "var(--bad)" : pct > 30 ? "var(--warn)" : "var(--good)";
     html += `
-      <div class="coverage-row" style="margin-top:0.5rem"><span><b>Board coverage</b></span><span>${pct}% <span class="n">(target 25–35%)</span></span></div>
+      <div class="coverage-row" style="margin-top:0.5rem"><span><b>Board coverage</b></span><span>${pct}% <span class="n">(target 15–25%)</span></span></div>
       <div class="coverage-bar-track"><div class="coverage-bar-fill" style="width:${barPct}%;background:${barColor}"></div></div>
     `;
     coveragePanel.innerHTML = html;
