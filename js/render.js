@@ -19,7 +19,12 @@ var LM = window.LM || (window.LM = {});
     });
   }
 
+  // Expects a "#rrggbb" hex color. Shading an already-shaded rgb(...) string (instead of
+  // the original hex) silently produces near-black — parseInt fails, NaN coerces to 0 in
+  // the bit shifts, and every channel collapses toward `amt`. Guard against that instead of
+  // reproducing the bug a third time: fall back to the input unchanged if it's not hex.
   function shade(hex, amt) {
+    if (typeof hex !== "string" || hex[0] !== "#") return hex;
     const n = parseInt(hex.slice(1), 16);
     let r = (n >> 16) + amt, g = ((n >> 8) & 0xff) + amt, b = (n & 0xff) + amt;
     r = Math.max(0, Math.min(255, r));
@@ -175,12 +180,15 @@ var LM = window.LM || (window.LM = {});
         drawShard(ctx, project, cx, cy, w * 1.1, d * 1.1, angle, 0, h, color);
         break;
       case "tree":
-        drawTreeShape(ctx, project, cx, cy, w, d, h, angle, shade(color, -20), accent);
+        // Raw hex in, not a pre-shaded value — drawExtruded shades each face itself, same
+        // as every other variant; feeding it an already-shaded "rgb(...)" string breaks
+        // its own internal shading (see the `shade()` comment above).
+        drawTreeShape(ctx, project, cx, cy, w, d, h, angle, color, accent);
         break;
       case "bunker": {
         const baseTop = h * 0.62;
         drawBlock(ctx, project, cx, cy, w * 1.1, d * 1.1, angle, 0, baseTop, color);
-        drawBlock(ctx, project, cx, cy, w * 0.8, d * 0.8, angle, baseTop, h, shade(color, -12));
+        drawBlock(ctx, project, cx, cy, w * 0.8, d * 0.8, angle, baseTop, h, color);
         break;
       }
       case "icespire":
@@ -231,27 +239,29 @@ var LM = window.LM || (window.LM = {});
     const scatterTheme = theme.scatter || { base: "#c2a25a", accent: "#a98a49", variant: "desert" };
     const base = scatterTheme.base, accent = scatterTheme.accent;
 
-    drawShadow(ctx, project, cx, cy, envW * 2, envD * 2);
+    // Scatter is the smallest category (real footprint ~1"x2") — the cluster as a whole
+    // should read as clearly smaller than Small (2"x4"), not rival or exceed it.
+    drawShadow(ctx, project, cx, cy, envW * 1.1, envD * 1.1);
 
     switch (scatterTheme.variant) {
       case "ice": {
         const n = 2 + Math.floor(rng() * 2);
         for (let i = 0; i < n; i++) {
           const ang = rng() * 360;
-          const off = (rng() - 0.5) * envD * 1.6;
+          const off = (rng() - 0.5) * envD * 0.8;
           const ox = Math.cos((ang * Math.PI) / 180) * off, oy = Math.sin((ang * Math.PI) / 180) * off;
-          const w = envW * (1.1 + rng() * 1.1), d = envD * (0.8 + rng() * 0.8);
+          const w = envW * (0.55 + rng() * 0.55), d = envD * (0.4 + rng() * 0.4);
           drawShard(ctx, project, cx + ox, cy + oy, w, d, ang, 0, cat.height * (0.7 + rng() * 0.9), i === 0 ? base : accent);
         }
         break;
       }
       case "forest": {
         const logAngle = rng() * 360;
-        drawBlock(ctx, project, cx, cy, envW * 4.5, envD * 1.1, logAngle, 0, cat.height * 0.45, base);
+        drawBlock(ctx, project, cx, cy, envW * 2.3, envD * 0.55, logAngle, 0, cat.height * 0.45, base);
         if (rng() > 0.35) {
           const perp = (logAngle + 90) * (Math.PI / 180);
-          const sx = cx + Math.cos(perp) * envD * 1.8, sy = cy + Math.sin(perp) * envD * 1.8;
-          drawBlock(ctx, project, sx, sy, envW * 1.4, envD * 1.4, rng() * 360, 0, cat.height * (0.9 + rng() * 0.6), accent);
+          const sx = cx + Math.cos(perp) * envD * 0.9, sy = cy + Math.sin(perp) * envD * 0.9;
+          drawBlock(ctx, project, sx, sy, envW * 0.7, envD * 0.7, rng() * 360, 0, cat.height * (0.9 + rng() * 0.6), accent);
         }
         break;
       }
@@ -260,9 +270,9 @@ var LM = window.LM || (window.LM = {});
         for (let i = 0; i < n; i++) {
           const ang = (360 / n) * i + rng() * 24;
           const rad = (ang * Math.PI) / 180;
-          const bladeLen = envD * (2.2 + rng() * 1.2);
+          const bladeLen = envD * (1.1 + rng() * 0.6);
           const bx = cx + Math.cos(rad) * bladeLen * 0.22, by = cy + Math.sin(rad) * bladeLen * 0.22;
-          drawBlade(ctx, project, bx, by, bladeLen, envW * 1.4, ang, 0, cat.height * (0.8 + rng() * 0.9), i % 2 === 0 ? accent : base);
+          drawBlade(ctx, project, bx, by, bladeLen, envW * 0.7, ang, 0, cat.height * (0.8 + rng() * 0.9), i % 2 === 0 ? accent : base);
         }
         break;
       }
@@ -270,13 +280,13 @@ var LM = window.LM || (window.LM = {});
         // City-plaza debris: a chunk of broken marble, plus (usually) a planter box with
         // an ornamental tuft — Theed's courtyards, not wild plains.
         const rubbleAngle = rng() * 360;
-        drawShard(ctx, project, cx, cy, envW * 1.3, envD * 1.1, rubbleAngle, 0, cat.height * (0.45 + rng() * 0.4), base);
+        drawShard(ctx, project, cx, cy, envW * 0.65, envD * 0.55, rubbleAngle, 0, cat.height * (0.45 + rng() * 0.4), base);
         if (rng() > 0.3) {
           const rad = rubbleAngle * (Math.PI / 180) + 1.3;
-          const px = cx + Math.cos(rad) * envD * 1.7, py = cy + Math.sin(rad) * envD * 1.7;
+          const px = cx + Math.cos(rad) * envD * 0.85, py = cy + Math.sin(rad) * envD * 0.85;
           const potAngle = rng() * 360;
-          drawBlock(ctx, project, px, py, envW * 0.9, envD * 0.9, potAngle, 0, cat.height * 0.55, base);
-          drawBlade(ctx, project, px, py, envD * 1.5, envW * 0.7, potAngle, cat.height * 0.55, cat.height * 1.0, accent);
+          drawBlock(ctx, project, px, py, envW * 0.45, envD * 0.45, potAngle, 0, cat.height * 0.55, base);
+          drawBlade(ctx, project, px, py, envD * 0.75, envW * 0.35, potAngle, cat.height * 0.55, cat.height * 1.0, accent);
         }
         break;
       }
@@ -285,18 +295,18 @@ var LM = window.LM || (window.LM = {});
         const n = 2 + Math.floor(rng() * 2);
         for (let i = 0; i < n; i++) {
           const ang = rng() * 360;
-          const off = (rng() - 0.5) * envD * 1.6;
+          const off = (rng() - 0.5) * envD * 0.8;
           const ox = Math.cos((ang * Math.PI) / 180) * off, oy = Math.sin((ang * Math.PI) / 180) * off;
-          const w = envW * (1.2 + rng() * 1.1), d = envD * (0.9 + rng() * 0.7);
+          const w = envW * (0.6 + rng() * 0.55), d = envD * (0.45 + rng() * 0.35);
           drawShard(ctx, project, cx + ox, cy + oy, w, d, ang, 0, cat.height * (0.5 + rng() * 0.6), i === 0 ? base : accent);
         }
         if (rng() > 0.72) {
-          drawBlock(ctx, project, cx, cy, envW * 0.6, envD * 0.6, rng() * 360, 0, cat.height * 2.4, accent);
+          drawBlock(ctx, project, cx, cy, envW * 0.3, envD * 0.3, rng() * 360, 0, cat.height * 2.4, accent);
         }
       }
     }
 
-    return boundingQuad(cx, cy, envW * 2.4, envD * 2.4, piece.rotation, project);
+    return boundingQuad(cx, cy, envW * 1.3, envD * 1.3, piece.rotation, project);
   }
 
   function drawTerrainPiece(ctx, project, piece, theme) {
