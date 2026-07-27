@@ -71,14 +71,28 @@ var LM = window.LM || (window.LM = {});
     return false;
   }
 
-  // Clamp requested inventory against the recommended count for the table: use everything
-  // you have up to the recommendation, flag both shortfalls and unused surplus.
-  LM.planCounts = function (tableKey, inventory) {
-    const suggested = LM.TABLES[tableKey].suggested;
+  // A suggested count is a fixed number or a {min,max} range — resolve to one concrete
+  // number. Called once per generated layout so "recommended setup" and the coverage
+  // panel's shortfall/surplus math always agree with each other.
+  function resolveSuggested(raw) {
+    if (typeof raw === "number") return raw;
+    return raw.min + Math.floor(Math.random() * (raw.max - raw.min + 1));
+  }
+
+  LM.resolveSuggestedCounts = function (tableKey) {
+    const raw = LM.TABLES[tableKey].suggested;
+    const out = {};
+    for (const key of LM.TERRAIN_ORDER) out[key] = resolveSuggested(raw[key]);
+    return out;
+  };
+
+  // Clamp requested inventory against the (already-resolved) recommended count for the
+  // table: use everything you have up to the recommendation, flag shortfalls and surplus.
+  LM.planCounts = function (resolvedSuggested, inventory) {
     const plan = {};
     for (const key of LM.TERRAIN_ORDER) {
       const have = Math.max(0, Math.floor(inventory[key] || 0));
-      const rec = suggested[key];
+      const rec = resolvedSuggested[key];
       plan[key] = {
         suggested: rec,
         available: have,
@@ -157,17 +171,18 @@ var LM = window.LM || (window.LM = {});
 
   // Splits the table into a grid of zones (columns x the two Blue/Red halves) and hands
   // out one shuffled zone per piece. This is what actually creates "lanes" — real tables
-  // group LOS-blockers into distinct clusters with gaps between them rather than
-  // scattering them uniformly at random, which tends to either wall off the board or
-  // leave no coherent open path across it.
+  // spread their LOS-blockers fairly evenly across the whole board with gaps between,
+  // rather than either walling off the board or leaving one whole side empty by chance.
+  // Column AND half alternate every single piece (not every `cols` pieces) specifically so
+  // small counts (e.g. 2 Large) still land on both sides instead of bunching on one.
   function zoneRegions(count, table) {
     if (count === 0) return [];
-    const cols = Math.max(1, Math.min(count, 4));
+    const cols = Math.max(1, Math.min(count, 5));
     const colW = table.length / cols;
     const regions = [];
     for (let i = 0; i < count; i++) {
       const col = i % cols;
-      const away = Math.floor(i / cols) % 2 === 1;
+      const away = i % 2 === 1;
       regions.push({
         xMin: col * colW,
         xMax: (col + 1) * colW,
@@ -180,12 +195,17 @@ var LM = window.LM || (window.LM = {});
 
   const fullRegion = (table) => ({ xMin: 0, xMax: table.length, yMin: 0, yMax: table.depth });
 
-  // Tries to seat a Barricade flush against one side of an already-placed Large/Medium
-  // piece, rotated to run along that edge — "extending the wall" rather than floating in
-  // open ground. Falls back to null so the caller can place it independently instead.
-  function placeBarricadeAgainstAnchor(placed, pois, table) {
+  // Barricade segments are commonly combined into short defensive lines — sometimes
+  // extending a Large/Medium building's wall, sometimes standing on their own as a
+  // fighting position in open ground. Neither needs every segment touching; a loose row
+  // with small gaps reads better than either a single flush piece or pure scatter.
+
+  // Tries to seat `count` Barricades along the SAME side of the SAME anchor, spaced out
+  // along that edge — "extending the wall." Returns how many actually got placed.
+  function placeAnchoredRow(count, placed, pois, table) {
     const bcat = LM.TERRAIN_CATEGORIES.barricade;
     const anchors = shuffle(placed.filter((p) => p.category === "large" || p.category === "medium").slice());
+    let best = [];
     for (const anchor of anchors) {
       const acat = LM.TERRAIN_CATEGORIES[anchor.category];
       for (const side of shuffle([0, 1, 2, 3])) {
@@ -193,57 +213,128 @@ var LM = window.LM || (window.LM = {});
         const halfExtent = alongLocalX ? acat.depth / 2 : acat.width / 2;
         const edgeLen = alongLocalX ? acat.width : acat.depth;
         const rotation = anchor.rotation + (alongLocalX ? 0 : 90);
-        for (const relax of [1, 0.6]) {
-          for (let attempt = 0; attempt < 25; attempt++) {
-            const along = (Math.random() - 0.5) * edgeLen * 0.7;
-            const outDist = halfExtent + bcat.depth / 2 + PIECE_GAP * relax;
-            let lx, ly;
-            if (side === 0) { lx = outDist; ly = along; }
-            else if (side === 1) { lx = along; ly = outDist; }
-            else if (side === 2) { lx = -outDist; ly = along; }
-            else { lx = along; ly = -outDist; }
-            const rad = (anchor.rotation * Math.PI) / 180;
-            const cos = Math.cos(rad), sin = Math.sin(rad);
-            const x = anchor.x + lx * cos - ly * sin;
-            const y = anchor.y + lx * sin + ly * cos;
-            const candidate = { x, y, rotation };
-            if (violates(candidate, "barricade", placed, pois, table, relax)) continue;
-            return { category: "barricade", x, y, rotation };
+        const usable = edgeLen * 0.8;
+        const step = usable / count;
+        const rad = (anchor.rotation * Math.PI) / 180;
+        const cos = Math.cos(rad), sin = Math.sin(rad);
+        const rowPieces = [];
+        for (let i = 0; i < count; i++) {
+          const baseAlong = -usable / 2 + step * (i + 0.5);
+          let placedThis = false;
+          for (const relax of [1, 0.6]) {
+            for (let attempt = 0; attempt < 15 && !placedThis; attempt++) {
+              const along = baseAlong + (Math.random() - 0.5) * step * 0.4;
+              const outDist = halfExtent + bcat.depth / 2 + PIECE_GAP * relax;
+              let lx, ly;
+              if (side === 0) { lx = outDist; ly = along; }
+              else if (side === 1) { lx = along; ly = outDist; }
+              else if (side === 2) { lx = -outDist; ly = along; }
+              else { lx = along; ly = -outDist; }
+              const x = anchor.x + lx * cos - ly * sin;
+              const y = anchor.y + lx * sin + ly * cos;
+              const candidate = { x, y, rotation };
+              if (violates(candidate, "barricade", placed.concat(rowPieces), pois, table, relax)) continue;
+              rowPieces.push({ category: "barricade", x, y, rotation });
+              placedThis = true;
+            }
           }
+          if (!placedThis) break;
         }
+        if (rowPieces.length === count) {
+          placed.push(...rowPieces);
+          return count; // full row fit — stop searching immediately
+        }
+        if (rowPieces.length > best.length) best = rowPieces;
       }
     }
-    return null;
+    // No anchor/side fit the whole group — settle for whichever attempt got closest.
+    if (best.length) placed.push(...best);
+    return best.length;
   }
 
-  LM.generateLayout = function ({ tableKey, missionKey, inventory }) {
+  // Places a short freestanding line of `count` Barricades — a fighting position that
+  // isn't attached to anything, just sitting in open ground. Returns how many placed.
+  function placeIndependentRow(count, placed, pois, table) {
+    const bcat = LM.TERRAIN_CATEGORIES.barricade;
+    const first = placePiece("barricade", fullRegion(table), placed, pois, table);
+    if (!first) return 0;
+    placed.push(first);
+    const rad = (first.rotation * Math.PI) / 180;
+    const dirX = Math.cos(rad), dirY = Math.sin(rad); // continue along the barricade's own length axis
+    const step = bcat.width + PIECE_GAP + 0.3;
+    let cx = first.x, cy = first.y, placedCount = 1;
+    let dir = Math.random() < 0.5 ? 1 : -1; // extend one way, but can flip if that side runs out
+    for (let i = 1; i < count; i++) {
+      let extended = false;
+      for (const tryDir of [dir, -dir]) {
+        for (const relax of [1, 0.7, 0.4]) {
+          for (let attempt = 0; attempt < 10 && !extended; attempt++) {
+            const jitterStep = step * (0.9 + Math.random() * 0.3);
+            const x = cx + dirX * jitterStep * tryDir, y = cy + dirY * jitterStep * tryDir;
+            const candidate = { x, y, rotation: first.rotation };
+            if (violates(candidate, "barricade", placed, pois, table, relax)) continue;
+            placed.push({ category: "barricade", x, y, rotation: first.rotation });
+            cx = x; cy = y; dir = tryDir;
+            placedCount++;
+            extended = true;
+          }
+          if (extended) break;
+        }
+        if (extended) break;
+      }
+      if (!extended) break;
+    }
+    return placedCount;
+  }
+
+  LM.generateLayout = function ({ tableKey, missionKey, inventory, useRecommended }) {
     const table = LM.TABLES[tableKey];
     const mission = LM.MISSIONS[tableKey].find((m) => m.key === missionKey);
     const pois = LM.getPOIs(tableKey, missionKey);
-    const plan = LM.planCounts(tableKey, inventory);
+    const resolvedSuggested = LM.resolveSuggestedCounts(tableKey);
+    const plan = LM.planCounts(resolvedSuggested, useRecommended ? resolvedSuggested : inventory);
 
-    // Place biggest pieces first so they get the most room to breathe.
-    const order = ["large", "medium", "small", "scatter", "barricade"];
+    // Place biggest pieces first so they get the most room to breathe. Barricades claim
+    // their spot right after the buildings go down, before Small/Scatter dressing has a
+    // chance to crowd out the wall-adjacent space they're looking for.
+    const order = ["large", "medium", "barricade", "small", "scatter"];
     const placed = [];
     const unplaced = {};
+
+    // Large/Medium/Small are the structural "kit" pieces and share ONE zone grid between
+    // them — otherwise each category zoning independently can, by chance, all land on the
+    // same side and leave the rest of the board empty. Scatter stays fully free: the
+    // community convention is that it dresses whatever lane space is left over.
+    const structuralCats = ["large", "medium", "small"];
+    const structuralTotal = structuralCats.reduce((sum, c) => sum + plan[c].used, 0);
+    const sharedZones = zoneRegions(structuralTotal, table);
+    let zoneCursor = 0;
 
     for (const catKey of order) {
       const toPlace = plan[catKey].used;
       unplaced[catKey] = 0;
 
       if (catKey === "barricade") {
-        for (let i = 0; i < toPlace; i++) {
-          const piece = placeBarricadeAgainstAnchor(placed, pois, table) || placePiece(catKey, fullRegion(table), placed, pois, table);
-          if (piece) placed.push(piece);
-          else unplaced[catKey] += 1;
+        let remaining = toPlace;
+        while (remaining > 0) {
+          const groupSize = Math.min(remaining, 1 + Math.floor(Math.random() * 3)); // rows of 1-3
+          const anchorsExist = placed.some((p) => p.category === "large" || p.category === "medium");
+          const tryAnchorFirst = anchorsExist && Math.random() < 0.55;
+          let count = tryAnchorFirst ? placeAnchoredRow(groupSize, placed, pois, table) : 0;
+          // A partial anchored row (e.g. 2 of 3 fit) shouldn't just abandon the leftover —
+          // fall back to independent placement for whatever's still short.
+          if (count < groupSize) count += placeIndependentRow(groupSize - count, placed, pois, table);
+          unplaced[catKey] += groupSize - count;
+          remaining -= groupSize;
         }
         continue;
       }
 
-      // Large/Medium/Small are the structural "kit" pieces — zone them so clusters form
-      // with real gaps between. Scatter is deliberately left fully free: the community
-      // convention is that it dresses whatever lane space is left, not the other way round.
-      const regions = catKey === "scatter" ? Array.from({ length: toPlace }, () => fullRegion(table)) : zoneRegions(toPlace, table);
+      const regions = catKey === "scatter"
+        ? Array.from({ length: toPlace }, () => fullRegion(table))
+        : sharedZones.slice(zoneCursor, zoneCursor + toPlace);
+      if (structuralCats.includes(catKey)) zoneCursor += toPlace;
+
       for (const region of regions) {
         const piece = placePiece(catKey, region, placed, pois, table);
         if (piece) placed.push(piece);

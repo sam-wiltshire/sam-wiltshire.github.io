@@ -216,8 +216,8 @@
     const redrawCardsPanel = opts.redrawCardsPanel !== false;
     const tableKey = tableSelect.value;
     const missionKey = missionSelect.value;
-    const inventory = currentSource === "recommended" ? TABLES[tableKey].suggested : readInventory();
-    const layout = generateLayout({ tableKey, missionKey, inventory });
+    const useRecommended = currentSource === "recommended";
+    const layout = generateLayout({ tableKey, missionKey, inventory: readInventory(), useRecommended });
     lastLayout = layout;
 
     tableDimsLabel.textContent = `${layout.mission.name} — ${layout.table.dimsLabel}`;

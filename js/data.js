@@ -142,6 +142,8 @@ LM.DEFAULT_THEME = "tatooine";
 // AMG's tournament guidance (via community table-building guides, not the core rulebook)
 // targets 25%-35% board coverage. The suggested counts below are tuned to land in that
 // band using the user's actual terrain footprints above.
+// A suggested count is either a fixed number or a {min,max} range (resolved to a random
+// concrete number once per generated layout — see generator.js's resolveSuggestedCounts).
 LM.TABLES = {
   standard: {
     key: "standard",
@@ -150,7 +152,7 @@ LM.TABLES = {
     length: 72, // along each player's deployment edge (the "long" edges)
     depth: 36, // between the two deployment edges
     territoryFrac: 1 / 3,
-    suggested: { large: 3, medium: 9, small: 14, scatter: 30, barricade: 10 },
+    suggested: { large: { min: 2, max: 3 }, medium: 6, small: 8, scatter: { min: 16, max: 24 }, barricade: 8 },
   },
   recon: {
     key: "recon",
@@ -159,7 +161,7 @@ LM.TABLES = {
     length: 36,
     depth: 36,
     territoryFrac: 1 / 3,
-    suggested: { large: 1, medium: 5, small: 7, scatter: 15, barricade: 5 },
+    suggested: { large: 1, medium: 3, small: 4, scatter: { min: 8, max: 12 }, barricade: 4 },
   },
 };
 
