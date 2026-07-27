@@ -38,6 +38,18 @@
     <button id="recommendedBtn" class="secondary-btn full-width">Show Recommended Standard Setup</button>
     <p class="hint mode-hint" id="modeHint"></p>
 
+    <section class="panel">
+      <h2>Share &amp; Export</h2>
+      <div class="btn-row">
+        <button id="shareBtn" class="secondary-btn grow">Copy Share Link</button>
+        <button id="exportBtn" class="secondary-btn grow">Export PNG</button>
+      </div>
+      <input id="shareUrl" class="share-url hidden" readonly />
+      <p class="hint" id="shareHint"></p>
+    </section>
+
+    <section class="panel" id="analysisPanel"></section>
+
     <section class="panel" id="coveragePanel"></section>
 
     <section class="panel" id="missionInfoPanel"></section>
@@ -48,9 +60,12 @@
   <main class="stage">
     <canvas id="stageCanvas"></canvas>
     <div id="hoverTooltip" class="hover-tooltip hidden"></div>
+    <div class="stage-hint" id="stageHint">Click a piece to pin it · drag to reposition</div>
     <div class="stage-footer">
       <span id="tableDimsLabel"></span>
       <div class="stage-footer-actions">
+        <button id="measureBtn" class="secondary-btn">Measure</button>
+        <button id="sightBtn" class="secondary-btn">Sight Lines</button>
         <button id="viewToggleBtn" class="secondary-btn">Bird's-Eye View</button>
         <button id="regenerateBtn" class="secondary-btn">Reroll Terrain</button>
       </div>
@@ -72,7 +87,9 @@
 
 <script src="js/data.js"></script>
 <script src="js/generator.js"></script>
+<script src="js/analysis.js"></script>
 <script src="js/render.js"></script>
+<script src="js/share.js"></script>
 <script src="js/main.js"></script>
 </body>
 </html>

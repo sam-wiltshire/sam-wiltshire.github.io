@@ -30,6 +30,23 @@ var LM = window.LM || (window.LM = {});
     });
   }
 
+  // Screen -> world on the ground plane (z = 0). Needed for dragging pieces and for the
+  // range-measuring tool. Inverting the iso transform:
+  //   sx = ox + (x - y) * halfW      =>  (x - y) = (sx - ox) / halfW
+  //   sy = oy + (x + y) * halfH      =>  (x + y) = (sy - oy) / halfH
+  function makeUnprojector(mode, scale, originX, originY) {
+    if (mode === "top") {
+      return (sx, sy) => ({ x: (sx - originX) / scale, y: (sy - originY) / scale });
+    }
+    const halfW = scale;
+    const halfH = scale * 0.5;
+    return (sx, sy) => {
+      const a = (sx - originX) / halfW;
+      const b = (sy - originY) / halfH;
+      return { x: (a + b) / 2, y: (b - a) / 2 };
+    };
+  }
+
   // Expects a "#rrggbb" hex color. Shading an already-shaded rgb(...) string (instead of
   // the original hex) silently produces near-black — parseInt fails, NaN coerces to 0 in
   // the bit shifts, and every channel collapses toward `amt`. Guard against that instead of
@@ -836,33 +853,112 @@ var LM = window.LM || (window.LM = {});
     ctx.restore();
   }
 
-  // Renders the layout and returns a hit-test list (front-most first) so the caller can
-  // resolve hover/mouseover without redoing any projection math.
-  LM.renderLayout = function (canvas, layout, mode, themeKey) {
+  // Exposure heatmap: green where a position is screened from most enemy firing angles,
+  // red where it's open to nearly all of them. Drawn on the ground plane under the terrain
+  // so pieces still read normally on top of it.
+  function drawExposure(ctx, project, exposure, floorPts) {
+    const { cols, rows, cellSize, values } = exposure;
+    // Knock the themed ground back first — a green/red ramp painted straight over sand or
+    // forest floor muddies into olive and stops reading as data.
+    if (floorPts) fillOnly(ctx, floorPts, "rgba(12,14,20,0.6)");
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const v = values[r * cols + c];
+        if (v < 0) continue; // inside terrain
+        const x0 = c * cellSize, y0 = r * cellSize;
+        const quad = [
+          project(x0, y0, 0.02), project(x0 + cellSize, y0, 0.02),
+          project(x0 + cellSize, y0 + cellSize, 0.02), project(x0, y0 + cellSize, 0.02),
+        ];
+        // green -> yellow -> red ramp
+        const red = Math.round(255 * Math.min(1, v * 1.6));
+        const green = Math.round(210 * Math.min(1, (1 - v) * 1.6));
+        fillOnly(ctx, quad, `rgba(${red},${green},45,0.55)`);
+      }
+    }
+  }
+
+  // Ring + connecting line for the range measuring tool, with the Legion range band.
+  function drawMeasure(ctx, project, measure) {
+    if (!measure || !measure.a || !measure.b) return;
+    const a = project(measure.a.x, measure.a.y, 0.06);
+    const b = project(measure.b.x, measure.b.y, 0.06);
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,220,90,0.95)";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    for (const p of [a, b]) {
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y, 5, 2.6, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255,220,90,0.95)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(60,45,0,0.9)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // Pinned pieces get a bright outline so it's obvious what a reroll will leave alone.
+  function drawLockRing(ctx, pts) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.closePath();
+    ctx.strokeStyle = "rgba(255,190,70,0.95)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Renders the layout and returns { regions, unproject } — regions is a hit-test list,
+  // front-most first, so the caller can resolve hover/click/drag without redoing any
+  // projection math, and unproject converts pointer coords back to table inches.
+  LM.renderLayout = function (canvas, layout, mode, themeKey, opts) {
+    opts = opts || {};
     mode = mode === "top" ? "top" : "iso";
     const theme = LM.THEMES[themeKey] || LM.THEMES[LM.DEFAULT_THEME];
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
+    // Explicit width/height (with dpr 1) lets the PNG exporter render off-screen at high
+    // resolution; a detached canvas has no bounding rect to measure.
+    const explicit = opts.width && opts.height;
+    const dpr = explicit ? (opts.dpr || 1) : (window.devicePixelRatio || 1);
+    const rect = explicit ? { width: opts.width, height: opts.height } : canvas.getBoundingClientRect();
     canvas.width = rect.width * dpr;
     canvas.height = rect.height * dpr;
     const ctx = canvas.getContext("2d");
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, rect.width, rect.height);
+    // Setting canvas.width above wipes the surface, so any backdrop has to be painted
+    // here rather than by the caller before it calls in.
+    if (opts.background) {
+      ctx.fillStyle = opts.background;
+      ctx.fillRect(0, 0, rect.width, rect.height);
+    }
 
     const { table, pois, terrain } = layout;
     let scale, originX, originY;
+    // Fill factors leave breathing room on screen; an export can afford to crop tighter.
+    const fitW = opts.fitW || 0.82;
+    const fitH = opts.fitH || 0.62;
     if (mode === "top") {
-      scale = Math.min((rect.width * 0.86) / table.length, (rect.height * 0.86) / table.depth);
+      const fitTop = opts.fitTop || 0.86;
+      scale = Math.min((rect.width * fitTop) / table.length, (rect.height * fitTop) / table.depth);
       originX = rect.width / 2 - (table.length * scale) / 2;
       originY = rect.height / 2 - (table.depth * scale) / 2;
     } else {
       scale = Math.min(
-        (rect.width * 0.82) / (table.length + table.depth),
-        (rect.height * 0.62) / ((table.length + table.depth) * 0.5)
+        (rect.width * fitW) / (table.length + table.depth),
+        (rect.height * fitH) / ((table.length + table.depth) * 0.5)
       );
       originX = rect.width / 2;
-      originY = rect.height * 0.22;
+      originY = rect.height * (opts.originYFrac || 0.22);
     }
     RC.mode = mode;
     RC.pxPerInch = scale;
@@ -882,46 +978,48 @@ var LM = window.LM || (window.LM = {});
 
     drawGroundTexture(ctx, project, table, theme);
 
-    // Territory tints
-    const T = table.territoryFrac * table.depth;
-    const tint = (y0, y1, color) => {
-      const pts = [project(0, y0, 0.01), project(table.length, y0, 0.01), project(table.length, y1, 0.01), project(0, y1, 0.01)];
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, pts[0].y);
-      pts.slice(1).forEach((p) => ctx.lineTo(p.x, p.y));
-      ctx.closePath();
-      ctx.fillStyle = color;
-      ctx.fill();
+    // Deployment zones (player Territory) come from the mission's Map Card, not a fixed
+    // fraction of the board — shapes differ per mission and aren't always plain bands.
+    const territories = LM.getTerritories(table.key, layout.mission.key);
+    const drawZone = (rects, fill, edge) => {
+      for (const r of rects) {
+        const pts = [
+          project(r.x0, r.y0, 0.01), project(r.x1, r.y0, 0.01),
+          project(r.x1, r.y1, 0.01), project(r.x0, r.y1, 0.01),
+        ];
+        fillOnly(ctx, pts, fill);
+        ctx.save();
+        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = edge;
+        ctx.lineWidth = 1.25;
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        pts.slice(1).forEach((p) => ctx.lineTo(p.x, p.y));
+        ctx.closePath();
+        ctx.stroke();
+        ctx.restore();
+      }
     };
-    tint(0, T, "rgba(70,120,210,0.16)");
-    tint(table.depth - T, table.depth, "rgba(210,60,50,0.14)");
-
-    // Territory (deployment zone) boundary lines — Player Territory is where a mission's
-    // rules let you Deploy; Contested Territory is the no-man's-land between them.
-    const zoneBoundary = (y, color) => {
-      const a = project(0, y, 0.015), b = project(table.length, y, 0.015);
-      ctx.save();
-      ctx.setLineDash([4, 4]);
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1.25;
-      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-      ctx.restore();
-    };
-    zoneBoundary(T, "rgba(70,120,210,0.6)");
-    zoneBoundary(table.depth - T, "rgba(210,60,50,0.6)");
+    drawZone(territories.blue, "rgba(70,120,210,0.16)", "rgba(70,120,210,0.6)");
+    drawZone(territories.red, "rgba(210,60,50,0.14)", "rgba(210,60,50,0.6)");
 
     ctx.font = "11px 'Segoe UI', sans-serif";
-    const zoneLabel = (y, text, color) => {
-      const p = project(table.length * 0.22, y, 0.015);
+    const zoneLabelAt = (rect, text, color) => {
+      if (!rect) return;
+      const p = project((rect.x0 + rect.x1) / 2, (rect.y0 + rect.y1) / 2, 0.015);
       ctx.save();
       ctx.textAlign = "center";
       ctx.fillStyle = color;
       ctx.fillText(text, p.x, p.y);
       ctx.restore();
     };
-    zoneLabel(T * 0.5, "BLUE TERRITORY", "rgba(120,160,230,0.85)");
-    zoneLabel(table.depth / 2, "CONTESTED", "rgba(200,200,210,0.75)");
-    zoneLabel(table.depth - T * 0.5, "RED TERRITORY", "rgba(230,120,110,0.85)");
+    zoneLabelAt(territories.blue[0], "BLUE DEPLOYMENT", "rgba(140,175,240,0.95)");
+    zoneLabelAt(territories.red[0], "RED DEPLOYMENT", "rgba(240,140,130,0.95)");
+    zoneLabelAt(
+      { x0: 0, x1: table.length, y0: table.depth * 0.46, y1: table.depth * 0.54 },
+      "CONTESTED",
+      "rgba(200,200,210,0.7)"
+    );
 
     // Grid lines every 6"
     ctx.strokeStyle = theme.grid;
@@ -935,12 +1033,16 @@ var LM = window.LM || (window.LM = {});
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
     }
 
+    // Exposure heatmap sits on the ground, beneath the terrain, so pieces stay readable.
+    if (opts.exposure) drawExposure(ctx, project, opts.exposure, floorPts);
+
     // Draw order: back-to-front by (x+y) so nearer pieces occlude further ones correctly.
     const drawables = [
       ...pois.map((p) => ({ type: "poi", depth: p.x + p.y, data: p })),
       ...terrain.map((t) => ({ type: "terrain", depth: t.x + t.y, data: t })),
     ].sort((a, b) => a.depth - b.depth);
 
+    const lockedIds = opts.lockedIds || null;
     const hitRegions = [];
     for (const d of drawables) {
       if (d.type === "poi") {
@@ -948,9 +1050,12 @@ var LM = window.LM || (window.LM = {});
         hitRegions.push({ type: "poi", data: d.data, x: hit.x, y: hit.y, r: hit.rPx * 1.4 });
       } else {
         const topPts = drawTerrainPiece(ctx, project, d.data, theme);
+        if (lockedIds && lockedIds.has(d.data.id)) drawLockRing(ctx, topPts);
         hitRegions.push({ type: "terrain", data: d.data, pts: topPts });
       }
     }
+
+    drawMeasure(ctx, project, opts.measure);
 
     // Border
     ctx.beginPath();
@@ -971,7 +1076,11 @@ var LM = window.LM || (window.LM = {});
     const redLbl = project(table.length / 2, table.depth + 3, 0);
     ctx.fillText("RED", redLbl.x, redLbl.y);
 
-    // Front-most first, so hover resolves to whatever visually occludes the rest.
-    return hitRegions.reverse();
+    // Front-most first, so hover/click resolves to whatever visually occludes the rest.
+    return {
+      regions: hitRegions.reverse(),
+      unproject: makeUnprojector(mode, scale, originX, originY),
+      project,
+    };
   };
 })();

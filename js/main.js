@@ -23,11 +23,28 @@
   const cardsPanel = document.getElementById("cardsPanel");
   const placementList = document.getElementById("placementList");
   const toggleListBtn = document.getElementById("toggleListBtn");
+  const shareBtn = document.getElementById("shareBtn");
+  const exportBtn = document.getElementById("exportBtn");
+  const shareUrlInput = document.getElementById("shareUrl");
+  const shareHint = document.getElementById("shareHint");
+  const analysisPanel = document.getElementById("analysisPanel");
+  const measureBtn = document.getElementById("measureBtn");
+  const sightBtn = document.getElementById("sightBtn");
+  const stageHint = document.getElementById("stageHint");
 
   let lastLayout = null;
   let lastHitRegions = [];
+  let unproject = null;
+  let lastProject = null;
   let currentSource = "own"; // 'own' | 'recommended'
   let viewMode = "iso"; // 'iso' | 'top'
+
+  const lockedIds = new Set();
+  let showSight = false;
+  let measureMode = false;
+  let measure = null; // { a, b } in table inches
+  let exposure = null;
+  let drag = null; // { piece, offsetX, offsetY, moved }
 
   function dimsLabel(cat) {
     return `${cat.width}" × ${cat.depth}" × ${cat.height}"`;
@@ -208,28 +225,87 @@
         : "Showing a layout built from your terrain collection above.";
   }
 
+  // Exposure is only recomputed when the layout actually changes, not on every repaint —
+  // it's the one genuinely expensive calculation here.
+  function refreshExposure() {
+    exposure = showSight && lastLayout ? LM.computeExposure(lastLayout, { cellSize: 2 }) : null;
+    renderAnalysisPanel();
+  }
+
+  function renderAnalysisPanel() {
+    if (!showSight || !exposure) {
+      analysisPanel.innerHTML = "";
+      analysisPanel.style.display = "none";
+      return;
+    }
+    analysisPanel.style.display = "";
+    const s = exposure.stats;
+    const lanePct = Math.round(s.clearLaneFrac * 100);
+    // Judge openness by how much of the firing web is unobstructed, not by raw distance:
+    // a corner-to-corner diagonal is long on any board, screened or not.
+    const tooOpen = s.clearLaneFrac > 0.55;
+    const tooDense = s.clearLaneFrac < 0.12;
+    const laneColor = tooOpen ? "var(--bad)" : tooDense ? "var(--warn)" : "var(--good)";
+    let verdict = "Balanced — cover to advance through, but firing lanes still matter.";
+    if (tooOpen) verdict = "Very open — most of the board is under fire from deployment. Consider another tall LOS blocker near the centre.";
+    else if (tooDense) verdict = "Very closed — almost nothing has line of sight across the board, which can stall shooting armies.";
+    analysisPanel.innerHTML = `
+      <h2>Sight Lines</h2>
+      <div class="stat-row"><span>Clear firing lanes</span><span class="v" style="color:${laneColor}">${lanePct}%</span></div>
+      <div class="stat-row"><span>Average exposure</span><span class="v">${Math.round(s.avgExposure * 100)}%</span></div>
+      <div class="stat-row"><span>Ground with good cover</span><span class="v">${Math.round(s.coveredFrac * 100)}%</span></div>
+      <div class="stat-row"><span>Longest clear shot</span><span class="v">${Math.round(s.longestLane)}"</span></div>
+      <div class="legend"><span>covered</span><span class="legend-bar"></span><span>exposed</span></div>
+      <p class="stat-note">${verdict}</p>
+    `;
+  }
+
   function redraw() {
-    lastHitRegions = renderLayout(canvas, lastLayout, viewMode, themeSelect.value);
+    const res = renderLayout(canvas, lastLayout, viewMode, themeSelect.value, {
+      exposure,
+      lockedIds,
+      measure,
+    });
+    lastHitRegions = res.regions;
+    unproject = res.unproject;
+    lastProject = res.project;
+  }
+
+  function afterLayoutChange(opts) {
+    opts = opts || {};
+    tableDimsLabel.textContent = `${lastLayout.mission.name} — ${lastLayout.table.dimsLabel}`;
+    updateModeHint();
+    refreshExposure();
+    redraw();
+    renderCoveragePanel(lastLayout);
+    renderMissionInfoPanel(lastLayout);
+    if (opts.redrawCardsPanel !== false) renderCardsPanel();
+    renderPlacementList(lastLayout);
+    saveState();
   }
 
   function runGenerate(opts) {
     opts = opts || {};
     if (opts.source) currentSource = opts.source;
-    const redrawCardsPanel = opts.redrawCardsPanel !== false;
     const tableKey = tableSelect.value;
     const missionKey = missionSelect.value;
     const useRecommended = currentSource === "recommended";
-    const layout = generateLayout({ tableKey, missionKey, inventory: readInventory(), useRecommended });
-    lastLayout = layout;
 
-    tableDimsLabel.textContent = `${layout.mission.name} — ${layout.table.dimsLabel}`;
-    updateModeHint();
-    redraw();
-    renderCoveragePanel(layout);
-    renderMissionInfoPanel(layout);
-    if (redrawCardsPanel) renderCardsPanel();
-    renderPlacementList(layout);
-    saveState();
+    // Pinned pieces survive a reroll; anything else is regenerated around them.
+    const keep = lastLayout && !opts.clearLocks
+      ? lastLayout.terrain.filter((p) => lockedIds.has(p.id))
+      : [];
+    if (opts.clearLocks) lockedIds.clear();
+
+    lastLayout = generateLayout({
+      tableKey,
+      missionKey,
+      inventory: readInventory(),
+      useRecommended,
+      locked: keep,
+    });
+    measure = null;
+    afterLayoutChange(opts);
   }
 
   function hitRegionAt(mx, my) {
@@ -252,25 +328,121 @@
     return `<b>${cat.label} terrain</b><br>${cat.width}" × ${cat.depth}" × ${cat.height}" &middot; ${cat.cover} cover<br>rotated ${rot}°`;
   }
 
-  canvas.addEventListener("mousemove", (e) => {
+  function canvasPos(e) {
     const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
+    return { mx: e.clientX - rect.left, my: e.clientY - rect.top };
+  }
+
+  // Legion's range ruler is five 6" segments; anything past 30" is "beyond Range 5".
+  function rangeBand(inches) {
+    if (inches <= 3) return "within Half Range";
+    const band = Math.ceil(inches / 6);
+    return band <= 5 ? `Range ${band}` : "beyond Range 5";
+  }
+
+  function showMeasureReadout() {
+    if (!measure || !measure.a || !measure.b) return;
+    const dist = Math.hypot(measure.b.x - measure.a.x, measure.b.y - measure.a.y);
+    hoverTooltip.innerHTML = `<b>${dist.toFixed(1)}"</b><br>${rangeBand(dist)}`;
+    const p = renderLayoutProjectPoint(measure.b);
+    hoverTooltip.style.left = `${p.x}px`;
+    hoverTooltip.style.top = `${p.y}px`;
+    hoverTooltip.classList.remove("hidden");
+  }
+
+  // The renderer hands back its projector, so the measurement label can sit on the
+  // measured point itself rather than tracking the cursor.
+  function renderLayoutProjectPoint(pt) {
+    return lastProject ? lastProject(pt.x, pt.y, 0.06) : { x: 0, y: 0 };
+  }
+
+  canvas.addEventListener("mousedown", (e) => {
+    if (!lastLayout || !unproject) return;
+    const { mx, my } = canvasPos(e);
+
+    if (measureMode) {
+      const w = unproject(mx, my);
+      if (!measure || (measure.a && measure.b)) measure = { a: w, b: null };
+      else measure.b = w;
+      redraw();
+      showMeasureReadout();
+      return;
+    }
+
+    const hit = hitRegionAt(mx, my);
+    if (hit && hit.type === "terrain") {
+      const w = unproject(mx, my);
+      // Track the grab offset rather than snapping the piece to the cursor: the hit region
+      // is the piece's TOP face, so unprojecting at ground level lands off-centre.
+      drag = { piece: hit.data, offsetX: hit.data.x - w.x, offsetY: hit.data.y - w.y, moved: false };
+      canvas.style.cursor = "grabbing";
+      e.preventDefault();
+    }
+  });
+
+  window.addEventListener("mousemove", (e) => {
+    if (!drag) return;
+    const { mx, my } = canvasPos(e);
+    const w = unproject(mx, my);
+    const table = lastLayout.table;
+    drag.piece.x = Math.max(0, Math.min(table.length, w.x + drag.offsetX));
+    drag.piece.y = Math.max(0, Math.min(table.depth, w.y + drag.offsetY));
+    drag.moved = true;
+    hoverTooltip.classList.add("hidden");
+    redraw();
+  });
+
+  window.addEventListener("mouseup", () => {
+    if (!drag) return;
+    const piece = drag.piece;
+    if (!drag.moved) {
+      // A click without movement toggles the pin.
+      if (lockedIds.has(piece.id)) lockedIds.delete(piece.id);
+      else lockedIds.add(piece.id);
+    } else {
+      // A hand-placed piece is implicitly pinned — a reroll shouldn't undo the move.
+      lockedIds.add(piece.id);
+      if (showSight) refreshExposure();
+      renderPlacementList(lastLayout);
+    }
+    drag = null;
+    canvas.style.cursor = "default";
+    updateStageHint();
+    redraw();
+  });
+
+  canvas.addEventListener("mousemove", (e) => {
+    if (drag || measureMode) return;
+    const { mx, my } = canvasPos(e);
     const hit = hitRegionAt(mx, my);
     if (hit) {
-      hoverTooltip.innerHTML = tooltipContent(hit);
+      let html = tooltipContent(hit);
+      if (hit.type === "terrain") {
+        html += lockedIds.has(hit.data.id) ? "<br><i>pinned — click to unpin</i>" : "<br><i>click to pin · drag to move</i>";
+      }
+      hoverTooltip.innerHTML = html;
       hoverTooltip.style.left = `${mx}px`;
       hoverTooltip.style.top = `${my}px`;
       hoverTooltip.classList.remove("hidden");
-      canvas.style.cursor = "pointer";
+      canvas.style.cursor = hit.type === "terrain" ? "grab" : "pointer";
     } else {
       hoverTooltip.classList.add("hidden");
       canvas.style.cursor = "default";
     }
   });
   canvas.addEventListener("mouseleave", () => {
-    hoverTooltip.classList.add("hidden");
+    if (!drag && !measureMode) hoverTooltip.classList.add("hidden");
   });
+
+  function updateStageHint() {
+    if (measureMode) {
+      stageHint.textContent = "Click two points to measure range";
+    } else if (lockedIds.size) {
+      stageHint.textContent = `${lockedIds.size} piece${lockedIds.size === 1 ? "" : "s"} pinned · reroll keeps them in place`;
+    } else {
+      stageHint.textContent = "Click a piece to pin it · drag to reposition";
+    }
+  }
 
   tableSelect.addEventListener("change", () => {
     populateMissionSelect();
@@ -281,14 +453,63 @@
     saveState();
     if (lastLayout) redraw();
   });
-  generateBtn.addEventListener("click", () => runGenerate({ source: "own" }));
-  recommendedBtn.addEventListener("click", () => runGenerate({ source: "recommended" }));
+  generateBtn.addEventListener("click", () => runGenerate({ source: "own", clearLocks: true }));
+  recommendedBtn.addEventListener("click", () => runGenerate({ source: "recommended", clearLocks: true }));
   regenerateBtn.addEventListener("click", () => runGenerate({ redrawCardsPanel: false }));
   viewToggleBtn.addEventListener("click", () => {
     viewMode = viewMode === "iso" ? "top" : "iso";
     viewToggleBtn.textContent = viewMode === "iso" ? "Bird's-Eye View" : "Isometric View";
     redraw();
   });
+
+  sightBtn.addEventListener("click", () => {
+    showSight = !showSight;
+    sightBtn.classList.toggle("active", showSight);
+    refreshExposure();
+    redraw();
+  });
+
+  measureBtn.addEventListener("click", () => {
+    measureMode = !measureMode;
+    measureBtn.classList.toggle("active", measureMode);
+    if (!measureMode) {
+      measure = null;
+      hoverTooltip.classList.add("hidden");
+      redraw();
+    }
+    updateStageHint();
+  });
+
+  shareBtn.addEventListener("click", () => {
+    if (!lastLayout) return;
+    const hash = "#" + LM.encodeLayout(lastLayout, themeSelect.value);
+    const url = location.href.split("#")[0] + hash;
+    history.replaceState(null, "", hash);
+    shareUrlInput.value = url;
+    shareUrlInput.classList.remove("hidden");
+    shareUrlInput.select();
+    // Clipboard API is unavailable on file:// in some browsers, so the input above is the
+    // guaranteed fallback rather than an afterthought.
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(
+        () => { shareHint.textContent = "Link copied to clipboard."; },
+        () => { shareHint.textContent = "Copy the link above (clipboard blocked)."; }
+      );
+    } else {
+      shareHint.textContent = "Copy the link above.";
+    }
+  });
+
+  exportBtn.addEventListener("click", () => {
+    if (!lastLayout) return;
+    shareHint.textContent = "Rendering image…";
+    // Let the label paint before the synchronous high-res render blocks the thread.
+    setTimeout(() => {
+      LM.exportPNG(lastLayout, viewMode, themeSelect.value, { exposure });
+      shareHint.textContent = "PNG downloaded.";
+    }, 30);
+  });
+
   toggleListBtn.addEventListener("click", () => {
     const hidden = placementList.classList.toggle("hidden");
     toggleListBtn.textContent = hidden ? "Show printable placement list ▾" : "Hide printable placement list ▴";
@@ -297,22 +518,34 @@
     if (lastLayout) redraw();
   });
 
+  // --- Boot ------------------------------------------------------------------------------
   const saved = loadSavedState();
+  const shared = LM.decodeLayout(location.hash);
 
   populateTableSelect();
-  if (saved && TABLES[saved.tableKey]) tableSelect.value = saved.tableKey;
+  if (shared) tableSelect.value = shared.tableKey;
+  else if (saved && TABLES[saved.tableKey]) tableSelect.value = saved.tableKey;
 
   populateMissionSelect();
-  if (saved && saved.missionKey && MISSIONS[tableSelect.value].some((m) => m.key === saved.missionKey)) {
+  if (shared) missionSelect.value = shared.missionKey;
+  else if (saved && saved.missionKey && MISSIONS[tableSelect.value].some((m) => m.key === saved.missionKey)) {
     missionSelect.value = saved.missionKey;
   }
 
   populateThemeSelect();
-  themeSelect.value = (saved && THEMES[saved.themeKey]) ? saved.themeKey : LM.DEFAULT_THEME;
+  themeSelect.value = shared ? shared.themeKey : (saved && THEMES[saved.themeKey]) ? saved.themeKey : LM.DEFAULT_THEME;
   updateThemeBlurb();
 
   buildInventoryForm();
   if (saved) applyInventory(saved.inventory);
 
-  runGenerate({ source: "own" });
+  if (shared) {
+    // A shared link is an exact table, so rebuild it verbatim instead of generating.
+    lastLayout = LM.layoutFromPieces(shared.tableKey, shared.missionKey, shared.terrain);
+    shareHint.textContent = "Loaded a shared layout.";
+    afterLayoutChange();
+  } else {
+    runGenerate({ source: "own" });
+  }
+  updateStageHint();
 })();

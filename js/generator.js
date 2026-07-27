@@ -42,6 +42,15 @@ var LM = window.LM || (window.LM = {});
       [-hx, -hy], [hx, -hy], [hx, hy], [-hx, hy],
     ].map(([dx, dy]) => ({ x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos }));
   }
+  // Shared so the line-of-sight analysis works from the exact same footprints the
+  // collision pass used — a second, drifting copy would silently disagree with placement.
+  LM.rectCorners = rectCorners;
+
+  // Footprint corners for a placed piece, straight from its category dimensions.
+  LM.pieceCorners = function (piece) {
+    const cat = LM.TERRAIN_CATEGORIES[piece.category];
+    return rectCorners(piece.x, piece.y, cat.width, cat.depth, piece.rotation);
+  };
 
   function rectAxes(angleDeg) {
     const rad = (angleDeg * Math.PI) / 180;
@@ -287,7 +296,9 @@ var LM = window.LM || (window.LM = {});
     return placedCount;
   }
 
-  LM.generateLayout = function ({ tableKey, missionKey, inventory, useRecommended }) {
+  let pieceIdSeq = 0;
+
+  LM.generateLayout = function ({ tableKey, missionKey, inventory, useRecommended, locked }) {
     const table = LM.TABLES[tableKey];
     const mission = LM.MISSIONS[tableKey].find((m) => m.key === missionKey);
     const pois = LM.getPOIs(tableKey, missionKey);
@@ -298,7 +309,14 @@ var LM = window.LM || (window.LM = {});
     // their spot right after the buildings go down, before Small/Scatter dressing has a
     // chance to crowd out the wall-adjacent space they're looking for.
     const order = ["large", "medium", "barricade", "small", "scatter"];
-    const placed = [];
+
+    // Pieces the user pinned stay exactly where they are and act as obstacles for
+    // everything placed around them, so a reroll reshuffles only the unpinned terrain.
+    const lockedPieces = (locked || []).map((p) => ({ ...p, locked: true }));
+    const placed = lockedPieces.slice();
+    const lockedByCat = {};
+    for (const p of lockedPieces) lockedByCat[p.category] = (lockedByCat[p.category] || 0) + 1;
+
     const unplaced = {};
 
     // Large/Medium/Small are the structural "kit" pieces and share ONE zone grid between
@@ -306,12 +324,13 @@ var LM = window.LM || (window.LM = {});
     // same side and leave the rest of the board empty. Scatter stays fully free: the
     // community convention is that it dresses whatever lane space is left over.
     const structuralCats = ["large", "medium", "small"];
-    const structuralTotal = structuralCats.reduce((sum, c) => sum + plan[c].used, 0);
+    const remainingFor = (c) => Math.max(0, plan[c].used - (lockedByCat[c] || 0));
+    const structuralTotal = structuralCats.reduce((sum, c) => sum + remainingFor(c), 0);
     const sharedZones = zoneRegions(structuralTotal, table);
     let zoneCursor = 0;
 
     for (const catKey of order) {
-      const toPlace = plan[catKey].used;
+      const toPlace = remainingFor(catKey);
       unplaced[catKey] = 0;
 
       if (catKey === "barricade") {
@@ -341,6 +360,10 @@ var LM = window.LM || (window.LM = {});
         else unplaced[catKey] += 1;
       }
     }
+
+    // Stable ids let the UI track which piece is pinned across a reroll; locked pieces
+    // keep the id they already had.
+    for (const p of placed) if (!p.id) p.id = `p${++pieceIdSeq}`;
 
     const usedCounts = {};
     for (const key of LM.TERRAIN_ORDER) usedCounts[key] = plan[key].used - unplaced[key];

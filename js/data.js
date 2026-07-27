@@ -184,6 +184,61 @@ LM.coverageArea = function (counts) {
 // Mission POI layout patterns (fractional coordinates: fx across the length, fy across
 // the depth, fy=0 is the Blue player's edge, fy=1 is the Red player's edge).
 // Reused identically between Standard and Recon where AMG reused the same mission name.
+// Deployment zones (player Territory) as fractions of the table: fx across the length,
+// fy across the depth, fy=0 at the Blue edge and fy=1 at the Red edge. A zone is a LIST of
+// rectangles so a mission can have an L-shaped or offset Territory rather than a plain band.
+//
+// APPROXIMATE — see the note on PATTERNS below. The printed Map Cards define these exactly,
+// but the card artwork in AMG's PDFs isn't machine-readable, so these are a careful reading
+// of each card, not measured values. Treat as a planning aid, not rules text.
+var TERRITORIES = {
+  // Straight opposing bands along the long edges — the most common arrangement.
+  band: function (depth) {
+    return {
+      blue: [{ fx0: 0, fx1: 1, fy0: 0, fy1: depth }],
+      red: [{ fx0: 0, fx1: 1, fy0: 1 - depth, fy1: 1 }],
+    };
+  },
+  // A band that also pushes up one flank, giving each player a corner salient.
+  salient: function (depth, flank) {
+    return {
+      blue: [
+        { fx0: 0, fx1: 1, fy0: 0, fy1: depth },
+        { fx0: 0, fx1: flank, fy0: depth, fy1: Math.min(0.5, depth * 2) },
+      ],
+      red: [
+        { fx0: 0, fx1: 1, fy0: 1 - depth, fy1: 1 },
+        { fx0: 1 - flank, fx1: 1, fy0: Math.max(0.5, 1 - depth * 2), fy1: 1 - depth },
+      ],
+    };
+  },
+  // Offset pockets on opposite diagonals rather than full-width bands.
+  diagonal: function (depth, width) {
+    return {
+      blue: [{ fx0: 0, fx1: width, fy0: 0, fy1: depth }],
+      red: [{ fx0: 1 - width, fx1: 1, fy0: 1 - depth, fy1: 1 }],
+    };
+  },
+};
+
+// Resolves a mission's fractional Territory rectangles into table inches.
+LM.getTerritories = function (tableKey, missionKey) {
+  const table = LM.TABLES[tableKey];
+  const mission = LM.MISSIONS[tableKey].find(function (m) { return m.key === missionKey; });
+  const frac = (mission && mission.territory) || TERRITORIES.band(1 / 3);
+  const toRects = function (list) {
+    return list.map(function (r) {
+      return {
+        x0: r.fx0 * table.length,
+        x1: r.fx1 * table.length,
+        y0: r.fy0 * table.depth,
+        y1: r.fy1 * table.depth,
+      };
+    });
+  };
+  return { blue: toRects(frac.blue), red: toRects(frac.red) };
+};
+
 var PATTERNS = {
   shiftingPriorities: [
     { fx: 0.5, fy: 0.5 },
@@ -220,6 +275,7 @@ LM.MISSIONS = {
   standard: [
     {
       key: "shifting-priorities",
+      territory: TERRITORIES.band(0.28),
       name: "Shifting Priorities",
       poiLabel: "Priority Target",
       pattern: PATTERNS.shiftingPriorities,
@@ -229,6 +285,7 @@ LM.MISSIONS = {
     },
     {
       key: "recover-the-research",
+      territory: TERRITORIES.band(0.25),
       name: "Recover the Research",
       poiLabel: "Lab",
       pattern: PATTERNS.recoverTheResearch,
@@ -238,6 +295,7 @@ LM.MISSIONS = {
     },
     {
       key: "intercept-signals",
+      territory: TERRITORIES.band(0.3),
       name: "Intercept Signals",
       poiLabel: "Comms Tower",
       pattern: PATTERNS.interceptSignals,
@@ -247,6 +305,7 @@ LM.MISSIONS = {
     },
     {
       key: "breakthrough",
+      territory: TERRITORIES.salient(0.22, 0.3),
       name: "Breakthrough",
       poiLabel: "Checkpoint",
       pattern: PATTERNS.breakthrough,
@@ -256,6 +315,7 @@ LM.MISSIONS = {
     },
     {
       key: "bunker-assault",
+      territory: TERRITORIES.band(0.26),
       name: "Bunker Assault",
       poiLabel: "Bunker",
       pattern: PATTERNS.bunkerAssault,
@@ -265,6 +325,7 @@ LM.MISSIONS = {
     },
     {
       key: "close-the-pocket",
+      territory: TERRITORIES.diagonal(0.34, 0.62),
       name: "Close the Pocket",
       poiLabel: "Stockpile",
       pattern: PATTERNS.closeThePocket,
@@ -276,6 +337,7 @@ LM.MISSIONS = {
   recon: [
     {
       key: "intercept-signals",
+      territory: TERRITORIES.band(0.3),
       name: "Intercept Signals",
       poiLabel: "Comms Tower",
       pattern: PATTERNS.interceptSignals,
@@ -285,6 +347,7 @@ LM.MISSIONS = {
     },
     {
       key: "bunker-assault",
+      territory: TERRITORIES.band(0.26),
       name: "Bunker Assault",
       poiLabel: "Bunker",
       pattern: PATTERNS.bunkerAssault,
@@ -294,6 +357,7 @@ LM.MISSIONS = {
     },
     {
       key: "close-the-pocket",
+      territory: TERRITORIES.diagonal(0.34, 0.62),
       name: "Close the Pocket",
       poiLabel: "Stockpile",
       pattern: PATTERNS.closeThePocket,
