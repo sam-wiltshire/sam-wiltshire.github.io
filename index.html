@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Legion Mapper</title>
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+<header class="site-header">
+  <h1>Legion <span>Mapper</span></h1>
+  <p class="subtitle">Fair terrain layouts for Star Wars: Legion, built from your own terrain collection and the current official missions.</p>
+</header>
+
+<div class="app">
+  <aside class="controls">
+    <section class="panel">
+      <h2>Game &amp; Mission</h2>
+      <label>Format
+        <select id="tableSelect"></select>
+      </label>
+      <label>Mission
+        <select id="missionSelect"></select>
+      </label>
+      <label>Planet Theme
+        <select id="themeSelect"></select>
+      </label>
+      <p class="hint" id="themeBlurb"></p>
+    </section>
+
+    <section class="panel">
+      <h2>Your Terrain</h2>
+      <p class="hint">How many pieces of each size do you own? Leave blank for none.</p>
+      <div id="inventoryForm" class="inventory-form"></div>
+    </section>
+
+    <button id="generateBtn" class="primary-btn">Generate From My Terrain</button>
+    <button id="recommendedBtn" class="secondary-btn full-width">Show Recommended Standard Setup</button>
+    <p class="hint mode-hint" id="modeHint"></p>
+
+    <section class="panel" id="coveragePanel"></section>
+
+    <section class="panel" id="missionInfoPanel"></section>
+
+    <section class="panel" id="cardsPanel"></section>
+  </aside>
+
+  <main class="stage">
+    <canvas id="stageCanvas"></canvas>
+    <div id="hoverTooltip" class="hover-tooltip hidden"></div>
+    <div class="stage-footer">
+      <span id="tableDimsLabel"></span>
+      <div class="stage-footer-actions">
+        <button id="viewToggleBtn" class="secondary-btn">Bird's-Eye View</button>
+        <button id="regenerateBtn" class="secondary-btn">Reroll Terrain</button>
+      </div>
+    </div>
+  </main>
+</div>
+
+<section class="panel placement-list-panel">
+  <button id="toggleListBtn" class="link-btn">Show printable placement list ▾</button>
+  <div id="placementList" class="placement-list hidden"></div>
+</section>
+
+<footer class="site-footer">
+  Terrain rules and mission structure adapted from Atomic Mass Games' Star Wars: Legion Core Rulebook (eff. 4.21.2026)
+  and Recon Rulebook (eff. 4.30.2025). Map layouts are a fair, symmetric approximation of the official Battle Cards —
+  not pixel-exact reproductions. Generic terrain placement (Large/Medium/Small/Scatter/Barricade) is left to players
+  by the rules, which is exactly what this tool generates for you.
+</footer>
+
+<script src="js/data.js"></script>
+<script src="js/generator.js"></script>
+<script src="js/render.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
