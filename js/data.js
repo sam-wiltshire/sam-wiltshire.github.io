@@ -8,10 +8,11 @@
 // The rulebooks fix Territory shape and POI (point-of-interest) placement per mission via
 // printed Map Cards, but leave *generic terrain* placement entirely up to the players
 // ("Declare and Place Terrain" is agreed cooperatively, before a mission is even built).
-// So: POI/Territory layouts below are a best-effort, symmetric approximation of each
-// official Map Card (exact card artwork isn't machine-readable), while generic terrain
-// (Large/Medium/Small/Scatter/Barricade) is generated fresh each time from your inventory,
-// which is the part the rules actually leave open — and the part this tool is for.
+// So: Territory/POI layouts below follow the printed Map Cards — the cards dimension every
+// Territory with the range tool, so those distances are read straight off the card and held
+// in inches (see TERRITORIES) — while generic terrain (Large/Medium/Small/Scatter/Barricade)
+// is generated fresh each time from your inventory, which is the part the rules actually
+// leave open, and the part this tool is for.
 //
 // Plain classic scripts (no ES modules) on purpose — this needs to work when someone just
 // double-clicks index.html (file://), and `type="module"` scripts are blocked by CORS there.
@@ -156,7 +157,6 @@ LM.TABLES = {
     dimsLabel: "3' × 6' (36\" × 72\")",
     length: 72, // along each player's deployment edge (the "long" edges)
     depth: 36, // between the two deployment edges
-    territoryFrac: 1 / 3,
     suggested: { large: { min: 2, max: 3 }, medium: 6, small: 8, scatter: { min: 16, max: 24 }, barricade: 8 },
   },
   recon: {
@@ -165,7 +165,6 @@ LM.TABLES = {
     dimsLabel: "3' × 3' (36\" × 36\")",
     length: 36,
     depth: 36,
-    territoryFrac: 1 / 3,
     suggested: { large: 1, medium: 3, small: 4, scatter: { min: 8, max: 12 }, barricade: 4 },
   },
 };
@@ -181,64 +180,111 @@ LM.coverageArea = function (counts) {
 };
 
 // ---------------------------------------------------------------------------
-// Mission POI layout patterns (fractional coordinates: fx across the length, fy across
-// the depth, fy=0 is the Blue player's edge, fy=1 is the Red player's edge).
-// Reused identically between Standard and Recon where AMG reused the same mission name.
-// Deployment zones (player Territory) as fractions of the table: fx across the length,
-// fy across the depth, fy=0 at the Blue edge and fy=1 at the Red edge. A zone is a LIST of
-// rectangles so a mission can have an L-shaped or offset Territory rather than a plain band.
+// Deployment zones (player Territory), in INCHES on the standard 6'x3' table.
 //
-// APPROXIMATE — see the note on PATTERNS below. The printed Map Cards define these exactly,
-// but the card artwork in AMG's PDFs isn't machine-readable, so these are a careful reading
-// of each card, not measured values. Treat as a planning aid, not rules text.
-var TERRITORIES = {
-  // Straight opposing bands along the long edges — the most common arrangement.
-  band: function (depth) {
-    return {
-      blue: [{ fx0: 0, fx1: 1, fy0: 0, fy1: depth }],
-      red: [{ fx0: 0, fx1: 1, fy0: 1 - depth, fy1: 1 }],
-    };
-  },
-  // A band that also pushes up one flank, giving each player a corner salient.
-  salient: function (depth, flank) {
-    return {
-      blue: [
-        { fx0: 0, fx1: 1, fy0: 0, fy1: depth },
-        { fx0: 0, fx1: flank, fy0: depth, fy1: Math.min(0.5, depth * 2) },
-      ],
-      red: [
-        { fx0: 0, fx1: 1, fy0: 1 - depth, fy1: 1 },
-        { fx0: 1 - flank, fx1: 1, fy0: Math.max(0.5, 1 - depth * 2), fy1: 1 - depth },
-      ],
-    };
-  },
-  // Offset pockets on opposite diagonals rather than full-width bands.
-  diagonal: function (depth, width) {
-    return {
-      blue: [{ fx0: 0, fx1: width, fy0: 0, fy1: depth }],
-      red: [{ fx0: 1 - width, fx1: 1, fy0: 1 - depth, fy1: 1 }],
-    };
-  },
-};
+// The Map Cards dimension every Territory with the range tool rather than as a share of the
+// table, so these are absolute distances: 1/2 = 3", 1 = 6", 2 = 12", 3 = 18", 4 = 24".
+// Read off the cards, they come out in whole 3" steps — every card annotates its zone depth
+// as 1 + 1/2 (9"), which leaves range 3 (18") of no-man's-land down the middle of the board.
+//
+// A Territory is a LIST of rectangles, because plenty of them aren't a plain band: they can
+// be L-shaped (a band along your own edge plus a salient running down a short edge into the
+// enemy half) or split into two separate blocks at opposite ends of your edge.
+//
+// Only BLUE is entered by hand. Every Map Card setup is rotationally symmetric, so Red's
+// Territory is Blue's turned 180 degrees about the table centre (see LM.getTerritories) —
+// which also guarantees the two sides can never drift apart.
+//
+// x runs along the table length, y across the depth from Blue's own edge (y=0).
+var CARD_LENGTH = 72; // the length the Map Card measurements are given for
 
-// Resolves a mission's fractional Territory rectangles into table inches.
-LM.getTerritories = function (tableKey, missionKey) {
-  const table = LM.TABLES[tableKey];
-  const mission = LM.MISSIONS[tableKey].find(function (m) { return m.key === missionKey; });
-  const frac = (mission && mission.territory) || TERRITORIES.band(1 / 3);
-  const toRects = function (list) {
-    return list.map(function (r) {
+// Builds a Territory from card measurements. Depths (y) stay absolute — they're range-tool
+// distances from a board edge, which don't change with the table. Lengthwise (x) values
+// scale with a shorter table, since there's no Recon Map Card to read exact numbers off.
+function cardZone(rects) {
+  return function (length, depth) {
+    const sx = length / CARD_LENGTH;
+    return rects.map(function (r) {
       return {
-        x0: r.fx0 * table.length,
-        x1: r.fx1 * table.length,
-        y0: r.fy0 * table.depth,
-        y1: r.fy1 * table.depth,
+        x0: r.x0 * sx,
+        x1: r.x1 * sx,
+        y0: Math.min(r.y0, depth),
+        y1: Math.min(r.y1, depth),
       };
     });
   };
-  return { blue: toRects(frac.blue), red: toRects(frac.red) };
+}
+
+var TERRITORIES = {
+  // A band down your own long edge, 9" deep (range 1 1/2 — the depth every card gives),
+  // starting `inset` in from one short edge and running `width` along the edge. Written the
+  // way the card dimensions it, so each mission entry below carries its own card numbers.
+  //
+  // Because Red is Blue rotated 180 degrees, the inset decides how the pair sits: a band
+  // that leaves its gap at ONE end alternates ends between the players (inset + width < 72),
+  // while one inset equally at both ends lines up with the enemy band (inset * 2 + width
+  // = 72). On screen Blue always holds the near edge, so an alternating pair can appear
+  // rotated 180 degrees from the card artwork — same board, read from the other end.
+  edgeBand: function (inset, width) {
+    return cardZone([{ x0: inset, x1: inset + width, y0: 0, y1: 9 }]);
+  },
+
+  // Close the Pocket: your Territory is SPLIT into two 21" (3 + 1/2) blocks at opposite ends
+  // of your own edge with a 30" gap between them, so each half sits range 3 (18") from enemy
+  // territory but range 5 (30") from your own other half.
+  splitEnds: cardZone([
+    { x0: 0, x1: 21, y0: 0, y1: 9 },
+    { x0: 51, x1: 72, y0: 0, y1: 9 },
+  ]),
+
+  // Breakthrough: the long-edge band is range 9 (54") wide, so it stops 18" (range 3) short
+  // of one end, and a 9"-wide salient runs down the near short edge to 21" — past the middle
+  // of the board, into the enemy half.
+  breakthrough: cardZone([
+    { x0: 0, x1: 54, y0: 0, y1: 9 },
+    { x0: 0, x1: 9, y0: 9, y1: 21 },
+  ]),
+
+  // Outflank: TWO separate zones per player. A range 6 (36") band centred on your own long
+  // edge, 9" deep, plus a range 1 (6") wide strip running range 4 (24") down the short edge
+  // out of your left corner — well past the middle of the board. Red's pair mirrors Blue's.
+  outflank: cardZone([
+    { x0: 18, x1: 54, y0: 0, y1: 9 },
+    { x0: 0, x1: 6, y0: 0, y1: 24 },
+  ]),
+
+  // Contact, Contact!: range 6 (36") of your own edge starting at your left, 9" deep — except
+  // that after the first range 1 (6") a range 2 (12") section runs range 4 (24") deep, well
+  // past the middle of the board. Red mirrors it, so the two Territories reach past each
+  // other rather than meeting in the middle.
+  contact: cardZone([
+    { x0: 0, x1: 36, y0: 0, y1: 9 },
+    { x0: 6, x1: 18, y0: 9, y1: 24 },
+  ]),
 };
 
+// Resolves a mission's Territory into table inches for both players.
+LM.getTerritories = function (tableKey, missionKey) {
+  const table = LM.TABLES[tableKey];
+  const mission = LM.MISSIONS[tableKey].find(function (m) { return m.key === missionKey; });
+  const build = (mission && mission.territory) || TERRITORIES.edgeBand(0, 72);
+  const blue = build(table.length, table.depth);
+  const red = blue.map(function (r) {
+    return {
+      x0: table.length - r.x1,
+      x1: table.length - r.x0,
+      y0: table.depth - r.y1,
+      y1: table.depth - r.y0,
+    };
+  });
+  return { blue: blue, red: red };
+};
+
+// ---------------------------------------------------------------------------
+// Mission POI layout patterns (fractional coordinates: fx across the length, fy across
+// the depth, fy=0 is the Blue player's edge, fy=1 is the Red player's edge).
+// Reused identically between Standard and Recon where AMG reused the same mission name.
+// Written as inches-over-table-size where the Map Card gives a measurement for them.
 var PATTERNS = {
   shiftingPriorities: [
     { fx: 0.5, fy: 0.5 },
@@ -256,18 +302,54 @@ var PATTERNS = {
     { fx: 0.25, fy: 1 / 3 }, { fx: 0.75, fy: 1 / 3 },
     { fx: 0.25, fy: 2 / 3 }, { fx: 0.75, fy: 2 / 3 },
   ],
+  // One Checkpoint sits in each player's band (48"/6" in) and one out in their salient
+  // (6" from the short edge, level with the table centre) — matching the L-shaped Territory.
   breakthrough: [
-    { fx: 0.2, fy: 0.15 }, { fx: 0.8, fy: 0.15 },
-    { fx: 0.2, fy: 0.85 }, { fx: 0.8, fy: 0.85 },
+    { fx: 48 / 72, fy: 6 / 36 }, { fx: 6 / 72, fy: 18 / 36 },
+    { fx: 24 / 72, fy: 30 / 36 }, { fx: 66 / 72, fy: 18 / 36 },
   ],
   bunkerAssault: [
     { fx: 0.4, fy: 0.15 }, { fx: 0.6, fy: 0.15 },
     { fx: 0.4, fy: 0.85 }, { fx: 0.6, fy: 0.85 },
   ],
+  // A straight line of 3 down the middle of the board: each Stockpile range 3 (18") from the
+  // long edges, at range 3 intervals from the short edges — not a diagonal.
   closeThePocket: [
-    { fx: 0.5, fy: 0.5 },
-    { fx: 0.22, fy: 0.18 },
-    { fx: 0.78, fy: 0.82 },
+    { fx: 18 / 72, fy: 0.5 },
+    { fx: 36 / 72, fy: 0.5 },
+    { fx: 54 / 72, fy: 0.5 },
+  ],
+  payload: [
+    { fx: 18 / 72, fy: 24 / 36 },
+    { fx: 36 / 72, fy: 18 / 36 },
+    { fx: 54 / 72, fy: 12 / 36 },
+  ],
+  // Cauldron: 6 markers ringing the centre — a pair 18" and 54" along the table 9" off each
+  // long edge, and two more either side of the centre on the centre line.
+  cauldron: [
+    { fx: 18 / 72, fy: 9 / 36 }, { fx: 54 / 72, fy: 9 / 36 },
+    { fx: 30 / 72, fy: 18 / 36 }, { fx: 42 / 72, fy: 18 / 36 },
+    { fx: 18 / 72, fy: 27 / 36 }, { fx: 54 / 72, fy: 27 / 36 },
+  ],
+  // Outflank: 4 markers — one 12" x 12" into each of two opposite corners, plus two on the
+  // centre line 12" and 24" up. The corner pair sits on the diagonal that puts each marker at
+  // the far end of the ENEMY's flank strip, which is what those strips are reaching for.
+  outflank: [
+    { fx: 12 / 72, fy: 24 / 36 },
+    { fx: 36 / 72, fy: 24 / 36 },
+    { fx: 36 / 72, fy: 12 / 36 },
+    { fx: 60 / 72, fy: 12 / 36 },
+  ],
+  // Contact, Contact!: 5 markers, read off the card in range steps in from the TOP-RIGHT
+  // corner — 3 in / 1 down, 6 in / 1 down, 6 in / 3 down (dead centre), 6 in / 5 down,
+  // 9 in / 5 down. The set is its own 180-degree rotation, so each player faces the same two
+  // markers plus the centre.
+  contactContact: [
+    { fx: 54 / 72, fy: 6 / 36 },
+    { fx: 36 / 72, fy: 6 / 36 },
+    { fx: 36 / 72, fy: 18 / 36 },
+    { fx: 36 / 72, fy: 30 / 36 },
+    { fx: 18 / 72, fy: 30 / 36 },
   ],
 };
 
@@ -275,7 +357,7 @@ LM.MISSIONS = {
   standard: [
     {
       key: "shifting-priorities",
-      territory: TERRITORIES.band(0.28),
+      territory: TERRITORIES.edgeBand(18, 54), // 1 1/2 deep x 9 wide, alternating ends
       name: "Shifting Priorities",
       poiLabel: "Priority Target",
       pattern: PATTERNS.shiftingPriorities,
@@ -285,7 +367,7 @@ LM.MISSIONS = {
     },
     {
       key: "recover-the-research",
-      territory: TERRITORIES.band(0.25),
+      territory: TERRITORIES.edgeBand(12, 54), // 2 in, 1 1/2 deep x 9 wide, alternating ends
       name: "Recover the Research",
       poiLabel: "Lab",
       pattern: PATTERNS.recoverTheResearch,
@@ -295,7 +377,7 @@ LM.MISSIONS = {
     },
     {
       key: "intercept-signals",
-      territory: TERRITORIES.band(0.3),
+      territory: TERRITORIES.edgeBand(12, 48), // 2 in, 1 1/2 deep x 8 wide, same both sides
       name: "Intercept Signals",
       poiLabel: "Comms Tower",
       pattern: PATTERNS.interceptSignals,
@@ -305,7 +387,7 @@ LM.MISSIONS = {
     },
     {
       key: "breakthrough",
-      territory: TERRITORIES.salient(0.22, 0.3),
+      territory: TERRITORIES.breakthrough,
       name: "Breakthrough",
       poiLabel: "Checkpoint",
       pattern: PATTERNS.breakthrough,
@@ -315,7 +397,7 @@ LM.MISSIONS = {
     },
     {
       key: "bunker-assault",
-      territory: TERRITORIES.band(0.26),
+      territory: TERRITORIES.edgeBand(12, 48), // 2 in, 1 1/2 deep x 8 wide, same both sides
       name: "Bunker Assault",
       poiLabel: "Bunker",
       pattern: PATTERNS.bunkerAssault,
@@ -325,19 +407,61 @@ LM.MISSIONS = {
     },
     {
       key: "close-the-pocket",
-      territory: TERRITORIES.diagonal(0.34, 0.62),
+      territory: TERRITORIES.splitEnds,
       name: "Close the Pocket",
       poiLabel: "Stockpile",
       pattern: PATTERNS.closeThePocket,
-      setup: "Place 3 Stockpiles (POI): 1 at the center, 2 off-center on opposite diagonals.",
+      setup: "Place 3 Stockpiles (POI) in a line across the middle of the board, each range 3 from a long edge and at range 3 intervals from the short edges.",
       scoring: "From Round 2, score 2 VP per End Phase for securing the center Stockpile, and 1 VP for each other Stockpile secured.",
+      special: null,
+    },
+    // The four cards below were read from their Map Cards only — the matching Objective card
+    // text isn't recorded here, so Setup describes the map and Scoring points at the card.
+    {
+      key: "payload",
+      territory: TERRITORIES.edgeBand(0, 72), // 1 1/2 deep, full edge
+      name: "Payload",
+      poiLabel: "POI",
+      pattern: PATTERNS.payload,
+      setup: "Place 3 POIs on a diagonal through the center of the board. Both Territories are plain 9\"-deep bands along the long edges.",
+      scoring: null,
+      special: null,
+    },
+    {
+      key: "cauldron",
+      territory: TERRITORIES.edgeBand(0, 72), // 1 1/2 deep, full edge
+      name: "Cauldron",
+      poiLabel: "POI",
+      pattern: PATTERNS.cauldron,
+      setup: "Place 6 POIs scattered across the middle of the board, 3 in each half. Both Territories are plain 9\"-deep bands along the long edges.",
+      scoring: null,
+      special: null,
+    },
+    {
+      key: "outflank",
+      territory: TERRITORIES.outflank,
+      name: "Outflank",
+      poiLabel: "POI",
+      pattern: PATTERNS.outflank,
+      setup: "Place 4 POIs across the middle of the board. Each player has two Territories: a 9\"-deep, 36\"-wide band centred on their own long edge, plus a 6\"-wide strip running 24\" down the short edge out of their left corner.",
+      scoring: null,
+      special: null,
+    },
+    {
+      key: "contact-contact",
+      territory: TERRITORIES.contact,
+      name: "Contact, Contact!",
+      poiLabel: "POI",
+      pattern: PATTERNS.contactContact,
+      setup: "Place 5 POIs: 1 dead center, plus 2 per half — one on the table's center line 6\" from your own long edge, and one 18\" in from your right short edge, also 6\" from your long edge. Blue's Territory starts at its left and covers 36\" of its own long edge, 9\" deep — except for a 12\"-wide section (starting 6\" along) that runs 24\" deep, well past the middle of the board. Red's is the mirror opposite.",
+      scoring: null,
       special: null,
     },
   ],
   recon: [
     {
       key: "intercept-signals",
-      territory: TERRITORIES.band(0.3),
+      territory: TERRITORIES.edgeBand(12, 48), // 2 in, 1 1/2 deep x 8 wide, same both sides
       name: "Intercept Signals",
       poiLabel: "Comms Tower",
       pattern: PATTERNS.interceptSignals,
@@ -347,7 +471,7 @@ LM.MISSIONS = {
     },
     {
       key: "bunker-assault",
-      territory: TERRITORIES.band(0.26),
+      territory: TERRITORIES.edgeBand(12, 48), // 2 in, 1 1/2 deep x 8 wide, same both sides
       name: "Bunker Assault",
       poiLabel: "Bunker",
       pattern: PATTERNS.bunkerAssault,
@@ -357,11 +481,11 @@ LM.MISSIONS = {
     },
     {
       key: "close-the-pocket",
-      territory: TERRITORIES.diagonal(0.34, 0.62),
+      territory: TERRITORIES.splitEnds,
       name: "Close the Pocket",
       poiLabel: "Stockpile",
       pattern: PATTERNS.closeThePocket,
-      setup: "Place 3 Stockpiles (POI): 1 at the center, 2 off-center on opposite diagonals.",
+      setup: "Place 3 Stockpiles (POI) in a line across the middle of the board, evenly spaced between the short edges.",
       scoring: "From Round 2, score 2 VP per End Phase for securing the center Stockpile, and 1 VP for each other Stockpile secured.",
       special: null,
     },

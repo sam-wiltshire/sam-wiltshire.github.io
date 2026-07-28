@@ -981,24 +981,67 @@ var LM = window.LM || (window.LM = {});
     // Deployment zones (player Territory) come from the mission's Map Card, not a fixed
     // fraction of the board — shapes differ per mission and aren't always plain bands.
     const territories = LM.getTerritories(table.key, layout.mission.key);
+    // A Territory is a list of rectangles — L-shaped and split-in-two zones are both normal
+    // on the Map Cards — so the dashes have to trace the zone's OUTER boundary only. Any
+    // segment that runs along the inside of a sibling rectangle is an internal seam.
+    const outlineSegments = (rects) => {
+      const EPS = 1e-6;
+      const insideSibling = (x, y, self) => rects.some((o, i) => (
+        i !== self && x > o.x0 - EPS && x < o.x1 + EPS && y > o.y0 - EPS && y < o.y1 + EPS
+      ));
+      const segs = [];
+      rects.forEach((r, i) => {
+        const sides = [
+          { horiz: true, at: r.y0, from: r.x0, to: r.x1 },
+          { horiz: true, at: r.y1, from: r.x0, to: r.x1 },
+          { horiz: false, at: r.x0, from: r.y0, to: r.y1 },
+          { horiz: false, at: r.x1, from: r.y0, to: r.y1 },
+        ];
+        for (const side of sides) {
+          // Cut the side wherever a sibling starts or ends, so a partly-shared edge keeps
+          // the part that really is a boundary (e.g. the band alongside a salient).
+          const cuts = [side.from, side.to];
+          for (let j = 0; j < rects.length; j++) {
+            if (j === i) continue;
+            for (const c of side.horiz ? [rects[j].x0, rects[j].x1] : [rects[j].y0, rects[j].y1]) {
+              if (c > side.from + EPS && c < side.to - EPS) cuts.push(c);
+            }
+          }
+          cuts.sort((a, b) => a - b);
+          for (let k = 0; k < cuts.length - 1; k++) {
+            const mid = (cuts[k] + cuts[k + 1]) / 2;
+            const inside = side.horiz
+              ? insideSibling(mid, side.at, i)
+              : insideSibling(side.at, mid, i);
+            if (inside) continue;
+            segs.push(side.horiz
+              ? [{ x: cuts[k], y: side.at }, { x: cuts[k + 1], y: side.at }]
+              : [{ x: side.at, y: cuts[k] }, { x: side.at, y: cuts[k + 1] }]);
+          }
+        }
+      });
+      return segs;
+    };
+
     const drawZone = (rects, fill, edge) => {
       for (const r of rects) {
-        const pts = [
+        fillOnly(ctx, [
           project(r.x0, r.y0, 0.01), project(r.x1, r.y0, 0.01),
           project(r.x1, r.y1, 0.01), project(r.x0, r.y1, 0.01),
-        ];
-        fillOnly(ctx, pts, fill);
-        ctx.save();
-        ctx.setLineDash([4, 4]);
-        ctx.strokeStyle = edge;
-        ctx.lineWidth = 1.25;
-        ctx.beginPath();
-        ctx.moveTo(pts[0].x, pts[0].y);
-        pts.slice(1).forEach((p) => ctx.lineTo(p.x, p.y));
-        ctx.closePath();
-        ctx.stroke();
-        ctx.restore();
+        ], fill);
       }
+      ctx.save();
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = edge;
+      ctx.lineWidth = 1.25;
+      for (const [a, b] of outlineSegments(rects)) {
+        const pa = project(a.x, a.y, 0.01), pb = project(b.x, b.y, 0.01);
+        ctx.beginPath();
+        ctx.moveTo(pa.x, pa.y);
+        ctx.lineTo(pb.x, pb.y);
+        ctx.stroke();
+      }
+      ctx.restore();
     };
     drawZone(territories.blue, "rgba(70,120,210,0.16)", "rgba(70,120,210,0.6)");
     drawZone(territories.red, "rgba(210,60,50,0.14)", "rgba(210,60,50,0.6)");
@@ -1013,8 +1056,14 @@ var LM = window.LM || (window.LM = {});
       ctx.fillText(text, p.x, p.y);
       ctx.restore();
     };
-    zoneLabelAt(territories.blue[0], "BLUE DEPLOYMENT", "rgba(140,175,240,0.95)");
-    zoneLabelAt(territories.red[0], "RED DEPLOYMENT", "rgba(240,140,130,0.95)");
+    // Label the widest rectangle of the zone — for a split or L-shaped Territory that's the
+    // main block, not whichever piece happens to be listed first.
+    const widestRect = (rects) => rects.reduce(
+      (best, r) => (r.x1 - r.x0 > best.x1 - best.x0 ? r : best),
+      rects[0]
+    );
+    zoneLabelAt(widestRect(territories.blue), "BLUE DEPLOYMENT", "rgba(140,175,240,0.95)");
+    zoneLabelAt(widestRect(territories.red), "RED DEPLOYMENT", "rgba(240,140,130,0.95)");
     zoneLabelAt(
       { x0: 0, x1: table.length, y0: table.depth * 0.46, y1: table.depth * 0.54 },
       "CONTESTED",

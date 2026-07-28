@@ -176,7 +176,7 @@
     const m = layout.mission;
     let html = `<h2>Mission</h2><p class="mission-name">${m.name}</p>`;
     html += `<div class="mission-block"><b>Setup</b>${m.setup}</div>`;
-    html += `<div class="mission-block"><b>Scoring</b>${m.scoring}</div>`;
+    html += `<div class="mission-block"><b>Scoring</b>${m.scoring || "Not recorded here — see the printed Objective card."}</div>`;
     if (m.special) html += `<div class="mission-block"><b>Special Rules</b>${m.special}</div>`;
     missionInfoPanel.innerHTML = html;
   }
