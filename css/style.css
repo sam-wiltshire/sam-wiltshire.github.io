@@ -93,6 +93,21 @@ select, input[type="number"] {
 .inv-row .inv-label small { display: block; color: var(--muted); font-size: 0.72rem; }
 .inv-row input { text-align: center; }
 
+/* Build mode's terrain palette — one add button per size, two to a row. */
+.palette { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; margin-bottom: 0.6rem; }
+.palette button {
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0.4rem 0.3rem;
+  font-size: 0.82rem;
+  line-height: 1.25;
+}
+.palette button:hover { border-color: var(--accent); color: var(--accent); }
+.palette button small { display: block; color: var(--muted); font-size: 0.7rem; }
+
 .primary-btn, .secondary-btn {
   width: 100%;
   padding: 0.65rem 1rem;

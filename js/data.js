@@ -493,6 +493,123 @@ LM.MISSIONS = {
 };
 
 // ---------------------------------------------------------------------------
+// AMG Terrain Layout Cards (DOC62, effective 07.2026) — an optional, official alternative
+// to this app's own terrain zoning.
+//
+// Each card covers HALF a battlefield: a 36" x 36" square marked on a 6" grid, with every
+// mark on a whole 3" step. Two cards are drawn and laid side by side to make a 6'x3' table
+// (either may go down rotated 180 degrees), then each Large/Medium/Small piece is placed
+// overlapping one of the marks. Recon's 3'x3' board is exactly one card.
+//
+// Coordinates are inches in the card's own frame: x from its left edge, y across the board
+// depth. `half: true` is a mark printed as a half circle on the card's left or right edge —
+// those only come into play once the cards are joined, per the card rules:
+//   - a half mark on the seam between the two cards counts as a full mark;
+//   - two half marks that line up across the seam are ONE mark, not two;
+//   - of the half marks left on an outer edge, the builder picks one per side.
+// See LM.drawTerrainLayout in generator.js for that resolution.
+LM.TERRAIN_LAYOUT_CARDS = [
+  {
+    id: 1,
+    marks: [
+      { x: 24, y:  3 },
+      { x: 12, y:  6 },
+      { x:  6, y: 12 },
+      { x: 36, y: 12, half: true },
+      { x: 21, y: 18 },
+      { x: 30, y: 18 },
+      { x:  0, y: 24, half: true },
+      { x: 12, y: 24 },
+      { x: 30, y: 30 },
+      { x:  6, y: 33 },
+    ],
+  },
+  {
+    id: 2,
+    marks: [
+      { x: 27, y:  3 },
+      { x:  9, y:  9 },
+      { x: 21, y:  9 },
+      { x:  0, y: 12, half: true },
+      { x: 36, y: 12, half: true },
+      { x: 18, y: 18 },
+      { x:  9, y: 24 },
+      { x: 27, y: 24 },
+      { x: 36, y: 30, half: true },
+      { x: 18, y: 33 },
+    ],
+  },
+  {
+    id: 3,
+    marks: [
+      { x:  9, y:  3 },
+      { x: 36, y:  6, half: true },
+      { x:  0, y: 12, half: true },
+      { x: 18, y: 12 },
+      { x:  9, y: 18 },
+      { x: 30, y: 18 },
+      { x:  0, y: 24, half: true },
+      { x: 18, y: 27 },
+      { x:  9, y: 30 },
+      { x: 36, y: 30, half: true },
+    ],
+  },
+  {
+    id: 4,
+    marks: [
+      { x: 12, y:  3 },
+      { x:  0, y:  6, half: true },
+      { x: 21, y: 12 },
+      { x: 36, y: 12, half: true },
+      { x:  6, y: 18 },
+      { x: 27, y: 18 },
+      { x: 36, y: 24, half: true },
+      { x: 21, y: 27 },
+      { x:  3, y: 30 },
+      { x: 12, y: 33 },
+    ],
+  },
+  {
+    id: 5,
+    marks: [
+      { x: 18, y:  3 },
+      { x: 36, y:  6, half: true },
+      { x: 12, y: 12 },
+      { x: 24, y: 12 },
+      { x:  3, y: 18 },
+      { x: 12, y: 24 },
+      { x: 24, y: 24 },
+      { x:  0, y: 30, half: true },
+      { x: 30, y: 33 },
+    ],
+  },
+  {
+    id: 6,
+    marks: [
+      { x: 27, y:  3 },
+      { x: 18, y:  6 },
+      { x: 36, y:  6, half: true },
+      { x:  0, y: 12, half: true },
+      { x: 12, y: 18 },
+      { x: 24, y: 18 },
+      { x: 36, y: 24, half: true },
+      { x:  3, y: 27 },
+      { x: 27, y: 27 },
+      { x: 18, y: 33 },
+    ],
+  },
+];
+
+// The card rules' own spacing: a terrain feature may not be within 1/2 (3") of another, and
+// should sit as close to 1 (6") from the others as it can. Fill-in terrain is exempt.
+LM.LAYOUT_CARD_RULES = {
+  cardSize: 36,
+  minFeatureGap: 3,
+  preferredFeatureGap: 6,
+  markedCategories: ["large", "medium", "small"],
+};
+
+// ---------------------------------------------------------------------------
 // Secondary Objectives & Advantage cards — shown for flavor/reference next to a
 // generated layout. Paraphrased summaries, not verbatim card text.
 LM.SECONDARY_OBJECTIVES = [

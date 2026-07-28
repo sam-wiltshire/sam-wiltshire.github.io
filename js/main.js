@@ -1,5 +1,5 @@
 (function () {
-  const { TERRAIN_CATEGORIES, TERRAIN_ORDER, TABLES, MISSIONS, THEMES, SECONDARY_OBJECTIVES, ADVANTAGE_CARDS } = LM;
+  const { TERRAIN_CATEGORIES, TERRAIN_ORDER, TABLES, MISSIONS, THEMES } = LM;
   const { generateLayout } = LM;
   const { renderLayout } = LM;
 
@@ -9,6 +9,19 @@
   const missionSelect = document.getElementById("missionSelect");
   const themeSelect = document.getElementById("themeSelect");
   const themeBlurb = document.getElementById("themeBlurb");
+  const terrainSourceSelect = document.getElementById("terrainSourceSelect");
+  const terrainSourceHint = document.getElementById("terrainSourceHint");
+  const terrainSourceRow = document.getElementById("terrainSourceRow");
+  const terrainPanel = document.getElementById("terrainPanel");
+  const modeSelect = document.getElementById("modeSelect");
+  const generateControls = document.getElementById("generateControls");
+  const buildPanel = document.getElementById("buildPanel");
+  const palette = document.getElementById("palette");
+  const selectionHint = document.getElementById("selectionHint");
+  const clearBoardBtn = document.getElementById("clearBoardBtn");
+  const loadCodeInput = document.getElementById("loadCodeInput");
+  const loadCodeBtn = document.getElementById("loadCodeBtn");
+  const loadCodeHint = document.getElementById("loadCodeHint");
   const inventoryForm = document.getElementById("inventoryForm");
   const generateBtn = document.getElementById("generateBtn");
   const recommendedBtn = document.getElementById("recommendedBtn");
@@ -20,7 +33,6 @@
   const modeHint = document.getElementById("modeHint");
   const coveragePanel = document.getElementById("coveragePanel");
   const missionInfoPanel = document.getElementById("missionInfoPanel");
-  const cardsPanel = document.getElementById("cardsPanel");
   const placementList = document.getElementById("placementList");
   const toggleListBtn = document.getElementById("toggleListBtn");
   const shareBtn = document.getElementById("shareBtn");
@@ -33,11 +45,15 @@
   const stageHint = document.getElementById("stageHint");
 
   let lastLayout = null;
+  let lastHandle = null; // build mode: screen position of the selected piece's rotate handle
   let lastHitRegions = [];
   let unproject = null;
   let lastProject = null;
   let currentSource = "own"; // 'own' | 'recommended'
   let viewMode = "iso"; // 'iso' | 'top'
+  let mode = "generate"; // 'generate' | 'build'
+  let selectedId = null; // build mode: the piece being edited
+  let buildSeq = 0;
 
   const lockedIds = new Set();
   let showSight = false;
@@ -69,6 +85,8 @@
           tableKey: tableSelect.value,
           missionKey: missionSelect.value,
           themeKey: themeSelect.value,
+          terrainSource: terrainSourceSelect.value,
+          mode,
         })
       );
     } catch (e) {
@@ -127,6 +145,145 @@
     }
   }
 
+  // --- Build mode: hand-place terrain for a post-mortem ----------------------------------
+  // No generation at all here — the board starts bare and everything on it was put there by
+  // the user, so the sight-line and coverage read-outs describe the table they actually
+  // played on rather than a suggested one.
+  function buildPalette() {
+    palette.innerHTML = "";
+    for (const key of TERRAIN_ORDER) {
+      const cat = TERRAIN_CATEGORIES[key];
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.innerHTML = `+ ${cat.label}<small>${cat.width}" × ${cat.depth}"</small>`;
+      btn.addEventListener("click", () => addPiece(key));
+      palette.appendChild(btn);
+    }
+  }
+
+  function emptyLayout() {
+    return LM.layoutFromPieces(tableSelect.value, missionSelect.value, []);
+  }
+
+  // Drops a new piece near the middle, nudged off-centre so repeated adds don't stack into
+  // one pile, then selects it so it can be dragged and turned straight away.
+  function addPiece(category) {
+    if (!lastLayout) lastLayout = emptyLayout();
+    const table = lastLayout.table;
+    const jitter = (n) => (Math.random() - 0.5) * n;
+    const piece = {
+      id: `b${++buildSeq}`,
+      category,
+      x: Math.max(3, Math.min(table.length - 3, table.length / 2 + jitter(table.length * 0.35))),
+      y: Math.max(3, Math.min(table.depth - 3, table.depth / 2 + jitter(table.depth * 0.5))),
+      rotation: 0,
+    };
+    lastLayout.terrain.push(piece);
+    selectedId = piece.id;
+    afterBuildEdit();
+  }
+
+  function selectedPiece() {
+    if (!selectedId || !lastLayout) return null;
+    return lastLayout.terrain.find((p) => p.id === selectedId) || null;
+  }
+
+  function rotateSelected(deg) {
+    const piece = selectedPiece();
+    if (!piece) return;
+    piece.rotation = (((piece.rotation + deg) % 360) + 360) % 360;
+    afterBuildEdit();
+  }
+
+  function deleteSelected() {
+    const piece = selectedPiece();
+    if (!piece) return;
+    lastLayout.terrain = lastLayout.terrain.filter((p) => p !== piece);
+    selectedId = null;
+    afterBuildEdit();
+  }
+
+  // Recount everything after an edit: coverage, the printable list, and — if it's switched
+  // on — the sight-line pass, which is the whole point of building the table by hand.
+  function afterBuildEdit() {
+    // Dropping from Standard to Recon shrinks the board under the terrain, so keep every
+    // piece on the table rather than leaving some floating off the edge.
+    const t = TABLES[tableSelect.value];
+    for (const p of lastLayout.terrain) {
+      p.x = Math.max(0, Math.min(t.length, p.x));
+      p.y = Math.max(0, Math.min(t.depth, p.y));
+    }
+    lastLayout = LM.layoutFromPieces(tableSelect.value, missionSelect.value, lastLayout.terrain);
+    if (showSight) refreshExposure();
+    redraw();
+    renderPlacementList(lastLayout);
+    updateSelectionHint();
+    updateStageHint();
+  }
+
+  function updateSelectionHint() {
+    const piece = selectedPiece();
+    if (!piece) {
+      const n = lastLayout ? lastLayout.terrain.length : 0;
+      selectionHint.textContent = n
+        ? `${n} piece${n === 1 ? "" : "s"} on the board · click one to select it.`
+        : "Board is empty — add a piece above, or load a saved layout code.";
+      return;
+    }
+    const cat = TERRAIN_CATEGORIES[piece.category];
+    selectionHint.textContent =
+      `Selected: ${cat.label} at ${piece.x.toFixed(1)}", ${piece.y.toFixed(1)}" · ${Math.round(piece.rotation)}°`;
+  }
+
+  function applyMode() {
+    const build = mode === "build";
+    generateControls.hidden = build;
+    terrainSourceRow.hidden = build;
+    buildPanel.hidden = !build;
+    // Build mode replaces the collection form with the palette — nothing is generated from
+    // your counts here — and the suggested-vs-available comparison stops meaning anything
+    // when every piece on the table was placed by hand.
+    terrainPanel.hidden = build;
+    coveragePanel.hidden = build;
+    // Nothing to reroll when every piece was placed by hand — the panel's Clear Board covers it.
+    regenerateBtn.hidden = build;
+    if (!build) selectedId = null;
+    updateStageHint();
+  }
+
+  function enterBuildMode() {
+    lastLayout = emptyLayout();
+    selectedId = null;
+    measure = null;
+    lockedIds.clear();
+    exposure = null;
+    afterLayoutChange({});
+    updateSelectionHint();
+  }
+
+  // Accepts either a bare code (v1.s.0.3...) or a whole share URL pasted in.
+  function loadFromCode(raw) {
+    const text = (raw || "").trim();
+    if (!text) return { ok: false, msg: "Paste a layout code or share link first." };
+    const code = text.includes("#") ? text.slice(text.indexOf("#") + 1) : text;
+    const decoded = LM.decodeLayout(code);
+    if (!decoded) return { ok: false, msg: "That doesn't look like a layout code — nothing loaded." };
+    tableSelect.value = decoded.tableKey;
+    populateMissionSelect();
+    missionSelect.value = decoded.missionKey;
+    if (THEMES[decoded.themeKey]) themeSelect.value = decoded.themeKey;
+    updateThemeBlurb();
+    lastLayout = LM.layoutFromPieces(decoded.tableKey, decoded.missionKey, decoded.terrain);
+    buildSeq = 0;
+    for (const p of lastLayout.terrain) p.id = `b${++buildSeq}`;
+    selectedId = null;
+    measure = null;
+    lockedIds.clear();
+    afterLayoutChange({});
+    updateSelectionHint();
+    return { ok: true, msg: `Loaded ${lastLayout.terrain.length} pieces — drag, rotate or delete any of them.` };
+  }
+
   function readInventory() {
     const inv = {};
     for (const key of TERRAIN_ORDER) {
@@ -181,18 +338,6 @@
     missionInfoPanel.innerHTML = html;
   }
 
-  function renderCardsPanel() {
-    const sec = SECONDARY_OBJECTIVES[Math.floor(Math.random() * SECONDARY_OBJECTIVES.length)];
-    const adv = ADVANTAGE_CARDS[Math.floor(Math.random() * ADVANTAGE_CARDS.length)];
-    cardsPanel.innerHTML = `
-      <h2>Drawn Cards</h2>
-      <ul class="card-list">
-        <li><b>Secondary — ${sec.name}</b><br /><span>${sec.summary}</span></li>
-        <li><b>Advantage — ${adv.name}</b><br /><span>${adv.summary}</span></li>
-      </ul>
-    `;
-  }
-
   function renderPlacementList(layout) {
     const { pois, terrain } = layout;
     const rows = [];
@@ -219,10 +364,39 @@
   }
 
   function updateModeHint() {
-    modeHint.textContent =
+    if (mode === "build") return; // build mode has its own hints in the build panel
+    // An empty collection generates an empty board. That reads as a broken app in card mode,
+    // where the drawn marks are the only thing left on the table — so say what's happening.
+    if (currentSource === "own" && lastLayout && !lastLayout.terrain.length) {
+      modeHint.textContent = lastLayout.layoutCards
+        ? "No terrain entered yet, so the board is showing only the drawn card marks. Fill in what you own above, or press Show Recommended Standard Setup."
+        : "No terrain entered yet. Fill in what you own above, or press Show Recommended Standard Setup.";
+      return;
+    }
+    const base =
       currentSource === "recommended"
         ? "Showing the recommended standard setup for this mission (ignores the form above)."
         : "Showing a layout built from your terrain collection above.";
+    const cards = lastLayout && lastLayout.layoutCards;
+    modeHint.textContent = cards ? `${base} ${describeDrawnCards(cards)}` : base;
+  }
+
+  function describeDrawnCards(layoutCards) {
+    const names = layoutCards.cards.map((c) => `Layout ${c.id}${c.rotated ? " (rotated)" : ""}`);
+    const off = lastLayout.terrain.filter(
+      (t) => LM.LAYOUT_CARD_RULES.markedCategories.includes(t.category) && !t.mark
+    ).length;
+    const tail = off
+      ? ` ${off} piece${off === 1 ? "" : "s"} wouldn't fit a free mark, so ${off === 1 ? "it was" : "they were"} placed as close as possible instead.`
+      : "";
+    return `Drawn: ${names.join(" + ")}. The small green pips are the cards' marks, not terrain.${tail}`;
+  }
+
+  function updateTerrainSourceHint() {
+    terrainSourceHint.textContent =
+      terrainSourceSelect.value === "cards"
+        ? "AMG's Terrain Layout Cards: two cards drawn at random (either may be rotated), then every Large/Medium/Small piece is placed overlapping one of the marks, at least 1/2 and ideally 1 from the others. Fill-in terrain goes anywhere."
+        : "This app's own zoning: terrain spread evenly across the board with movement lanes between clusters.";
   }
 
   // Exposure is only recomputed when the layout actually changes, not on every repaint —
@@ -265,10 +439,12 @@
       exposure,
       lockedIds,
       measure,
+      selectedId: mode === "build" ? selectedId : null,
     });
     lastHitRegions = res.regions;
     unproject = res.unproject;
     lastProject = res.project;
+    lastHandle = res.handle || null;
   }
 
   function afterLayoutChange(opts) {
@@ -277,9 +453,8 @@
     updateModeHint();
     refreshExposure();
     redraw();
-    renderCoveragePanel(lastLayout);
+    if (mode !== "build") renderCoveragePanel(lastLayout);
     renderMissionInfoPanel(lastLayout);
-    if (opts.redrawCardsPanel !== false) renderCardsPanel();
     renderPlacementList(lastLayout);
     saveState();
   }
@@ -303,6 +478,7 @@
       inventory: readInventory(),
       useRecommended,
       locked: keep,
+      terrainSource: terrainSourceSelect.value,
     });
     measure = null;
     afterLayoutChange(opts);
@@ -369,14 +545,36 @@
       return;
     }
 
+    // Build mode: grabbing the handle beside the selected piece turns it instead of moving it.
+    if (mode === "build" && lastHandle) {
+      if (Math.hypot(mx - lastHandle.sx, my - lastHandle.sy) <= lastHandle.r + 4) {
+        const piece = selectedPiece();
+        if (piece) {
+          drag = { piece, rotating: true, moved: false };
+          canvas.style.cursor = "grabbing";
+          e.preventDefault();
+          return;
+        }
+      }
+    }
+
     const hit = hitRegionAt(mx, my);
     if (hit && hit.type === "terrain") {
       const w = unproject(mx, my);
       // Track the grab offset rather than snapping the piece to the cursor: the hit region
       // is the piece's TOP face, so unprojecting at ground level lands off-centre.
       drag = { piece: hit.data, offsetX: hit.data.x - w.x, offsetY: hit.data.y - w.y, moved: false };
+      if (mode === "build") {
+        selectedId = hit.data.id;
+        updateSelectionHint();
+        redraw();
+      }
       canvas.style.cursor = "grabbing";
       e.preventDefault();
+    } else if (mode === "build") {
+      selectedId = null;
+      updateSelectionHint();
+      redraw();
     }
   });
 
@@ -385,16 +583,33 @@
     const { mx, my } = canvasPos(e);
     const w = unproject(mx, my);
     const table = lastLayout.table;
-    drag.piece.x = Math.max(0, Math.min(table.length, w.x + drag.offsetX));
-    drag.piece.y = Math.max(0, Math.min(table.depth, w.y + drag.offsetY));
+    if (drag.rotating) {
+      // Point the piece's "up" axis at the cursor, measured on the ground plane so the angle
+      // still tracks the pointer in the isometric view.
+      const deg = (Math.atan2(w.y - drag.piece.y, w.x - drag.piece.x) * 180) / Math.PI;
+      drag.piece.rotation = (((deg - 90) % 360) + 360) % 360;
+    } else {
+      drag.piece.x = Math.max(0, Math.min(table.length, w.x + drag.offsetX));
+      drag.piece.y = Math.max(0, Math.min(table.depth, w.y + drag.offsetY));
+    }
     drag.moved = true;
     hoverTooltip.classList.add("hidden");
+    if (mode === "build") updateSelectionHint();
     redraw();
   });
 
   window.addEventListener("mouseup", () => {
     if (!drag) return;
     const piece = drag.piece;
+    // Build mode has no reroll to protect a piece from, so a click selects rather than pins
+    // and any edit just refreshes the read-outs.
+    if (mode === "build") {
+      selectedId = piece.id;
+      drag = null;
+      canvas.style.cursor = "default";
+      afterBuildEdit();
+      return;
+    }
     if (!drag.moved) {
       // A click without movement toggles the pin.
       if (lockedIds.has(piece.id)) lockedIds.delete(piece.id);
@@ -434,9 +649,42 @@
     if (!drag && !measureMode) hoverTooltip.classList.add("hidden");
   });
 
+  // Wheel over a piece rotates it — 5 degrees a notch, 1 with Shift held for fine tuning.
+  // Only ever consumes the scroll when it's actually over a piece, so the page still scrolls.
+  canvas.addEventListener("wheel", (e) => {
+    if (mode !== "build" || measureMode || !lastLayout) return;
+    const { mx, my } = canvasPos(e);
+    const hit = hitRegionAt(mx, my);
+    const piece = hit && hit.type === "terrain" ? hit.data : null;
+    if (!piece) return;
+    e.preventDefault();
+    selectedId = piece.id;
+    const step = e.shiftKey ? 1 : 5;
+    piece.rotation = (((piece.rotation + (e.deltaY > 0 ? step : -step)) % 360) + 360) % 360;
+    afterBuildEdit();
+  }, { passive: false });
+
+  window.addEventListener("keydown", (e) => {
+    if (mode !== "build") return;
+    const el = document.activeElement;
+    if (el && (el.tagName === "INPUT" || el.tagName === "SELECT" || el.tagName === "TEXTAREA")) return;
+    const step = e.shiftKey ? 1 : 5;
+    if (e.key === "[") rotateSelected(-step);
+    else if (e.key === "]") rotateSelected(step);
+    else if (e.key === "Delete" || e.key === "Backspace") {
+      if (!selectedPiece()) return;
+      e.preventDefault();
+      deleteSelected();
+    } else return;
+  });
+
   function updateStageHint() {
     if (measureMode) {
       stageHint.textContent = "Click two points to measure range";
+    } else if (mode === "build") {
+      stageHint.textContent = selectedPiece()
+        ? "Drag to move · drag the handle, scroll or [ ] to rotate · Del to remove"
+        : "Add a piece from the palette, or click one to select it";
     } else if (lockedIds.size) {
       stageHint.textContent = `${lockedIds.size} piece${lockedIds.size === 1 ? "" : "s"} pinned · reroll keeps them in place`;
     } else {
@@ -444,9 +692,43 @@
     }
   }
 
+  modeSelect.addEventListener("change", () => {
+    mode = modeSelect.value;
+    applyMode();
+    saveState();
+    if (mode === "build") enterBuildMode();
+    else runGenerate({ clearLocks: true });
+  });
+
+  buildPalette();
+  clearBoardBtn.addEventListener("click", () => {
+    loadCodeHint.textContent = "";
+    enterBuildMode();
+  });
+  loadCodeBtn.addEventListener("click", () => {
+    const res = loadFromCode(loadCodeInput.value);
+    loadCodeHint.textContent = res.msg;
+  });
+
   tableSelect.addEventListener("change", () => {
     populateMissionSelect();
     saveState();
+    // In build mode there's no Generate button to press, so the board follows the selection
+    // immediately — keeping the terrain, since it's the user's own hand-placed table.
+    if (mode === "build") {
+      if (!lastLayout) enterBuildMode();
+      else afterBuildEdit();
+    }
+  });
+  missionSelect.addEventListener("change", () => {
+    saveState();
+    if (mode === "build" && lastLayout) afterBuildEdit();
+  });
+  // Switching terrain source changes placement outright, so rebuild rather than just redraw.
+  terrainSourceSelect.addEventListener("change", () => {
+    updateTerrainSourceHint();
+    saveState();
+    runGenerate({ clearLocks: true });
   });
   themeSelect.addEventListener("change", () => {
     updateThemeBlurb();
@@ -455,7 +737,11 @@
   });
   generateBtn.addEventListener("click", () => runGenerate({ source: "own", clearLocks: true }));
   recommendedBtn.addEventListener("click", () => runGenerate({ source: "recommended", clearLocks: true }));
-  regenerateBtn.addEventListener("click", () => runGenerate({ redrawCardsPanel: false }));
+  // Reroll would throw away a hand-built table, so in build mode it clears instead.
+  regenerateBtn.addEventListener("click", () => {
+    if (mode === "build") enterBuildMode();
+    else runGenerate({});
+  });
   viewToggleBtn.addEventListener("click", () => {
     viewMode = viewMode === "iso" ? "top" : "iso";
     viewToggleBtn.textContent = viewMode === "iso" ? "Bird's-Eye View" : "Isometric View";
@@ -535,6 +821,14 @@
   populateThemeSelect();
   themeSelect.value = shared ? shared.themeKey : (saved && THEMES[saved.themeKey]) ? saved.themeKey : LM.DEFAULT_THEME;
   updateThemeBlurb();
+
+  if (saved && saved.terrainSource) terrainSourceSelect.value = saved.terrainSource;
+  updateTerrainSourceHint();
+
+  // A shared link always lands in generate mode — it describes a finished table.
+  if (!shared && saved && saved.mode === "build") mode = "build";
+  modeSelect.value = mode;
+  applyMode();
 
   buildInventoryForm();
   if (saved) applyInventory(saved.inventory);

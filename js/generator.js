@@ -128,6 +128,110 @@ var LM = window.LM || (window.LM = {});
     return poi.isCenter ? CENTER_POI_CLEARANCE : POI_CLEARANCE;
   }
 
+  // --- AMG Terrain Layout Cards ----------------------------------------------------------
+  // Draws cards for a table and resolves them into one list of marks in table inches. A card
+  // covers half a battlefield, so Standard lays two side by side and Recon uses exactly one;
+  // either card can come down rotated 180 degrees.
+  LM.drawTerrainLayout = function (tableKey) {
+    const table = LM.TABLES[tableKey];
+    const rules = LM.LAYOUT_CARD_RULES;
+    const slots = Math.max(1, Math.round(table.length / rules.cardSize));
+    const drawn = shuffle(LM.TERRAIN_LAYOUT_CARDS.slice())
+      .slice(0, slots)
+      .map((card) => ({ card, id: card.id, rotated: Math.random() < 0.5 }));
+
+    const raw = [];
+    drawn.forEach((entry, slot) => {
+      const x0 = slot * rules.cardSize;
+      for (const m of entry.card.marks) {
+        raw.push({
+          x: x0 + (entry.rotated ? rules.cardSize - m.x : m.x),
+          y: entry.rotated ? table.depth - m.y : m.y,
+          half: !!m.half,
+        });
+      }
+    });
+
+    const samePlace = (a, b) => Math.abs(a.x - b.x) < 0.01 && Math.abs(a.y - b.y) < 0.01;
+    const marks = raw.filter((m) => !m.half).map((m) => ({ x: m.x, y: m.y }));
+
+    // A half mark on the seam between two cards counts as a full mark, and two that line up
+    // across the seam are the same single mark — not two marks 0" apart.
+    for (const m of raw) {
+      const onSeam = m.half && m.x > 0.01 && m.x < table.length - 0.01;
+      if (onSeam && !marks.some((k) => samePlace(k, m))) marks.push({ x: m.x, y: m.y, seam: true });
+    }
+    // Of the half marks left on an outer edge, the builder picks one per side.
+    for (const edge of [0, table.length]) {
+      const options = raw.filter((m) => m.half && Math.abs(m.x - edge) < 0.01);
+      if (!options.length) continue;
+      const pick = options[Math.floor(Math.random() * options.length)];
+      marks.push({ x: pick.x, y: pick.y, chosenHalf: true });
+    }
+    return { cards: drawn.map((d) => ({ id: d.id, rotated: d.rotated })), marks };
+  };
+
+  const GAP_LADDER = [12, 9, 7.5, 6, 4.5, 3, 1.5];
+
+  function rectOf(piece) {
+    const cat = LM.TERRAIN_CATEGORIES[piece.category];
+    return { x: piece.x, y: piece.y, w: cat.width, d: cat.depth, angle: piece.rotation };
+  }
+
+  // Widest spacing this candidate keeps from every structural piece already down — used to
+  // chase the card rules' "as close to 1 as possible" without ever breaking the 1/2 minimum.
+  function featureClearance(rect, structural) {
+    for (const g of GAP_LADDER) {
+      if (structural.every((p) => rectsClear(rect, rectOf(p), g))) return g;
+    }
+    return 0;
+  }
+
+  function cornersInBounds(rect, table, margin) {
+    return rectCorners(rect.x, rect.y, rect.w, rect.d, rect.angle).every(
+      (c) => c.x >= margin && c.x <= table.length - margin && c.y >= margin && c.y <= table.depth - margin
+    );
+  }
+
+  // Seats a piece so its footprint OVERLAPS the mark: the card rules only ask that the piece
+  // cover a marked spot, so its centre is free to slide within its own footprint. That
+  // freedom is what lets a Large piece sit on a mark 3" from the table edge.
+  function placeOnMark(catKey, mark, placed, pois, table, minGap) {
+    const cat = LM.TERRAIN_CATEGORIES[catKey];
+    const rules = LM.LAYOUT_CARD_RULES;
+    const structural = placed.filter((p) => !FILLER[p.category]);
+    let best = null;
+    for (let i = 0; i < 400; i++) {
+      const rotation = Math.random() * 360;
+      const rad = (rotation * Math.PI) / 180;
+      // Offset the centre from the mark within the footprint, keeping the mark covered.
+      const u = (Math.random() - 0.5) * cat.width * 0.85;
+      const v = (Math.random() - 0.5) * cat.depth * 0.85;
+      const x = mark.x - (u * Math.cos(rad) - v * Math.sin(rad));
+      const y = mark.y - (u * Math.sin(rad) + v * Math.cos(rad));
+      const rect = { x, y, w: cat.width, d: cat.depth, angle: rotation };
+      // A chosen half mark sits ON the table edge, so a piece covering it has to be able to
+      // sit flush against that edge — the usual inboard margin is only a preference here.
+      if (!cornersInBounds(rect, table, 0)) continue;
+      const inboard = cornersInBounds(rect, table, EDGE_MARGIN);
+
+      const clearance = featureClearance(rect, structural);
+      if (clearance < minGap) continue;
+      if (placed.some((p) => FILLER[p.category] && !rectsClear(rect, rectOf(p), PIECE_GAP))) continue;
+
+      const r = footprintRadius(catKey);
+      const poiClear = pois.every((poi) => dist(x, y, poi.x, poi.y) >= r + poiClearanceFor(poi));
+      // Prefer the preferred gap, and prefer not to bury a POI — but a mark is a mark, so a
+      // POI conflict only loses to a candidate that avoids one.
+      const score = -Math.abs(clearance - rules.preferredFeatureGap)
+        + (poiClear ? 100 : 0)
+        + (inboard ? 20 : 0);
+      if (!best || score > best.score) best = { score, piece: { category: catKey, x, y, rotation, mark } };
+      if (poiClear && clearance === rules.preferredFeatureGap) break;
+    }
+    return best ? best.piece : null;
+  }
+
   // `relax` shrinks clearances progressively (1 = full community-guideline spacing,
   // smaller = pack tighter) so small boards or big collections still fit everything;
   // we always try the fair/spaced-out arrangement first and only tighten if it won't fit.
@@ -298,7 +402,7 @@ var LM = window.LM || (window.LM = {});
 
   let pieceIdSeq = 0;
 
-  LM.generateLayout = function ({ tableKey, missionKey, inventory, useRecommended, locked }) {
+  LM.generateLayout = function ({ tableKey, missionKey, inventory, useRecommended, locked, terrainSource }) {
     const table = LM.TABLES[tableKey];
     const mission = LM.MISSIONS[tableKey].find((m) => m.key === missionKey);
     const pois = LM.getPOIs(tableKey, missionKey);
@@ -308,7 +412,11 @@ var LM = window.LM || (window.LM = {});
     // Place biggest pieces first so they get the most room to breathe. Barricades claim
     // their spot right after the buildings go down, before Small/Scatter dressing has a
     // chance to crowd out the wall-adjacent space they're looking for.
-    const order = ["large", "medium", "barricade", "small", "scatter"];
+    // Card mode instead follows the card rules' own order: every listed feature
+    // (Large/Medium/Small) is seated on a mark first, and fill-in terrain goes down after.
+    const order = terrainSource === "cards"
+      ? ["large", "medium", "small", "barricade", "scatter"]
+      : ["large", "medium", "barricade", "small", "scatter"];
 
     // Pieces the user pinned stay exactly where they are and act as obstacles for
     // everything placed around them, so a reroll reshuffles only the unpinned terrain.
@@ -318,6 +426,12 @@ var LM = window.LM || (window.LM = {});
     for (const p of lockedPieces) lockedByCat[p.category] = (lockedByCat[p.category] || 0) + 1;
 
     const unplaced = {};
+
+    // Terrain Layout Card mode: draw the cards up front so every structural piece can be
+    // seated on a mark. Marks are consumed as they're used, one piece per mark.
+    const rules = LM.LAYOUT_CARD_RULES;
+    const layoutCards = terrainSource === "cards" ? LM.drawTerrainLayout(tableKey) : null;
+    const marks = layoutCards ? shuffle(layoutCards.marks.slice()) : null;
 
     // Large/Medium/Small are the structural "kit" pieces and share ONE zone grid between
     // them — otherwise each category zoning independently can, by chance, all land on the
@@ -355,7 +469,40 @@ var LM = window.LM || (window.LM = {});
       if (structuralCats.includes(catKey)) zoneCursor += toPlace;
 
       for (const region of regions) {
-        const piece = placePiece(catKey, region, placed, pois, table);
+        let piece = null;
+        // Card mode: Large/Medium/Small each have to overlap one of the drawn marks. Try the
+        // marks in shuffled order and claim the first that this piece actually fits on, so a
+        // mark boxed in by earlier pieces stays available for something smaller.
+        if (marks && rules.markedCategories.includes(catKey)) {
+          // Roomiest mark first — a Large building wants the mark with space around it, the
+          // way a human would lay the big pieces out before filling in the tight spots.
+          const structural = placed.filter((p) => !FILLER[p.category]);
+          const order = marks
+            .map((mark, i) => ({
+              i,
+              room: structural.length
+                ? Math.min(...structural.map((p) => dist(mark.x, mark.y, p.x, p.y)))
+                : Math.random() * 36,
+            }))
+            .sort((a, b) => b.room - a.room)
+            .map((entry) => entry.i);
+          // Honour the 3" minimum first; only if no mark can take the piece at all does the
+          // spacing give way, since sitting on a mark is the point of the card.
+          for (const gap of [rules.minFeatureGap, 1.5]) {
+            for (const i of order) {
+              const attempt = placeOnMark(catKey, marks[i], placed, pois, table, gap);
+              if (attempt) {
+                piece = attempt;
+                marks.splice(i, 1);
+                break;
+              }
+            }
+            if (piece) break;
+          }
+        }
+        // Fill-in terrain is placed freely by the card rules, and anything that couldn't be
+        // seated on a mark still goes down "as close as they can" rather than being dropped.
+        if (!piece) piece = placePiece(catKey, region, placed, pois, table);
         if (piece) placed.push(piece);
         else unplaced[catKey] += 1;
       }
@@ -380,6 +527,8 @@ var LM = window.LM || (window.LM = {});
       usedCounts,
       unplaced,
       coveragePct,
+      layoutCards,
+      unusedMarks: marks || null,
     };
   };
 })();

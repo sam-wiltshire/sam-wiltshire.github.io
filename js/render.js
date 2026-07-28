@@ -1082,6 +1082,18 @@ var LM = window.LM || (window.LM = {});
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
     }
 
+    // Seam between the two Terrain Layout Cards, so it's clear which half came from which.
+    if (layout.layoutCards && layout.layoutCards.cards.length > 1) {
+      const seam = LM.LAYOUT_CARD_RULES.cardSize;
+      const a = project(seam, 0, 0.02), b = project(seam, table.depth, 0.02);
+      ctx.save();
+      ctx.setLineDash([2, 6]);
+      ctx.strokeStyle = "rgba(150,215,70,0.4)";
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      ctx.restore();
+    }
+
     // Exposure heatmap sits on the ground, beneath the terrain, so pieces stay readable.
     if (opts.exposure) drawExposure(ctx, project, opts.exposure, floorPts);
 
@@ -1101,6 +1113,73 @@ var LM = window.LM || (window.LM = {});
         const topPts = drawTerrainPiece(ctx, project, d.data, theme);
         if (lockedIds && lockedIds.has(d.data.id)) drawLockRing(ctx, topPts);
         hitRegions.push({ type: "terrain", data: d.data, pts: topPts });
+      }
+    }
+
+    // Terrain Layout Card marks go on TOP of the terrain: every Large/Medium/Small piece is
+    // sitting on one, so drawn underneath they'd be hidden by the very piece they placed.
+    // They stay deliberately small and faint — a mark is a reference point for checking the
+    // table against the physical cards, not a piece of terrain, and it must never be mistaken
+    // for one. A mark with a piece on it is a filled pip; an unused mark is a hollow ring.
+    if (layout.layoutCards) {
+      const used = new Set((terrain || []).filter((t) => t.mark).map((t) => `${t.mark.x},${t.mark.y}`));
+      ctx.save();
+      for (const m of layout.layoutCards.marks) {
+        const p = project(m.x, m.y, 0.02);
+        const isUsed = used.has(`${m.x},${m.y}`);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, isUsed ? 2 : 3, 0, Math.PI * 2);
+        if (isUsed) {
+          ctx.fillStyle = "rgba(150,215,70,0.5)";
+          ctx.fill();
+        }
+        ctx.strokeStyle = isUsed ? "rgba(150,215,70,0.55)" : "rgba(170,235,90,0.75)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // Build mode: ring the selected piece and hang a rotate handle off it. The handle sits on
+    // the piece's own "up" axis at a fixed distance from its centre, so dragging it round
+    // reads as turning the piece. Its screen position goes back to the caller for hit-testing.
+    let handle = null;
+    if (opts.selectedId) {
+      const piece = (terrain || []).find((t) => t.id === opts.selectedId);
+      if (piece) {
+        const cat = LM.TERRAIN_CATEGORIES[piece.category];
+        const pts = LM.pieceCorners(piece).map((c) => project(c.x, c.y, cat.height + 0.05));
+        ctx.save();
+        ctx.strokeStyle = "rgba(232,130,58,0.95)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        pts.slice(1).forEach((p) => ctx.lineTo(p.x, p.y));
+        ctx.closePath();
+        ctx.stroke();
+
+        const reach = Math.max(cat.width, cat.depth) / 2 + 3;
+        const rad = (piece.rotation * Math.PI) / 180;
+        const hx = piece.x - reach * Math.sin(rad);
+        const hy = piece.y + reach * Math.cos(rad);
+        const centre = project(piece.x, piece.y, cat.height + 0.05);
+        const hp = project(hx, hy, cat.height + 0.05);
+        ctx.setLineDash([3, 3]);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(centre.x, centre.y);
+        ctx.lineTo(hp.x, hp.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.arc(hp.x, hp.y, 6, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(232,130,58,0.9)";
+        ctx.fill();
+        ctx.strokeStyle = "rgba(30,20,10,0.8)";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.restore();
+        handle = { sx: hp.x, sy: hp.y, r: 6 };
       }
     }
 
@@ -1130,6 +1209,7 @@ var LM = window.LM || (window.LM = {});
       regions: hitRegions.reverse(),
       unproject: makeUnprojector(mode, scale, originX, originY),
       project,
+      handle,
     };
   };
 })();

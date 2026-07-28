@@ -16,28 +16,74 @@
   <aside class="controls">
     <section class="panel">
       <h2>Game &amp; Mission</h2>
+      <label>Mode
+        <select id="modeSelect">
+          <option value="generate">Generate a layout</option>
+          <option value="build">Build it myself — post-mortem</option>
+        </select>
+      </label>
       <label>Format
         <select id="tableSelect"></select>
       </label>
       <label>Mission
         <select id="missionSelect"></select>
       </label>
+      <div id="terrainSourceRow">
+        <label>Terrain Layout
+          <select id="terrainSourceSelect">
+            <option value="free">Generated — spread evenly with movement lanes</option>
+            <option value="cards">AMG Terrain Layout Cards</option>
+          </select>
+        </label>
+        <p class="hint" id="terrainSourceHint"></p>
+      </div>
       <label>Planet Theme
         <select id="themeSelect"></select>
       </label>
       <p class="hint" id="themeBlurb"></p>
     </section>
 
-    <section class="panel">
+    <section class="panel" id="terrainPanel">
       <h2>Your Terrain</h2>
       <p class="hint">How many pieces of each size do you own? Leave blank for none.</p>
       <div id="inventoryForm" class="inventory-form"></div>
     </section>
 
-    <button id="generateBtn" class="primary-btn">Generate From My Terrain</button>
-    <button id="recommendedBtn" class="secondary-btn full-width">Show Recommended Standard Setup</button>
-    <p class="hint mode-hint" id="modeHint"></p>
+    <div id="generateControls">
+      <button id="generateBtn" class="primary-btn">Generate From My Terrain</button>
+      <button id="recommendedBtn" class="secondary-btn full-width">Show Recommended Standard Setup</button>
+      <p class="hint mode-hint" id="modeHint"></p>
+    </div>
 
+    <section class="panel" id="buildPanel" hidden>
+      <h2>Build the Table</h2>
+      <p class="hint">
+        Add a piece, drag it into place, then rotate it with the handle beside it, the mouse
+        wheel, or the <b>[</b> and <b>]</b> keys. <b>Del</b> removes the selected piece.
+        Turn on Sight Lines to read the table you've built.
+      </p>
+      <div id="palette" class="palette"></div>
+      <p class="hint" id="selectionHint"></p>
+      <div class="btn-row">
+        <button id="clearBoardBtn" class="secondary-btn grow">Clear Board</button>
+      </div>
+      <label>Load a saved layout code
+        <input id="loadCodeInput" class="share-url" placeholder="v1.s.0.3… or a full share link" />
+      </label>
+      <div class="btn-row">
+        <button id="loadCodeBtn" class="secondary-btn grow">Load Layout</button>
+      </div>
+      <p class="hint" id="loadCodeHint"></p>
+    </section>
+
+    <section class="panel" id="analysisPanel"></section>
+
+    <section class="panel" id="coveragePanel"></section>
+
+    <section class="panel" id="missionInfoPanel"></section>
+
+    <!-- Sharing and exporting come last in both modes: they're what you do once the table
+         on screen is the one you want. -->
     <section class="panel">
       <h2>Share &amp; Export</h2>
       <div class="btn-row">
@@ -47,14 +93,6 @@
       <input id="shareUrl" class="share-url hidden" readonly />
       <p class="hint" id="shareHint"></p>
     </section>
-
-    <section class="panel" id="analysisPanel"></section>
-
-    <section class="panel" id="coveragePanel"></section>
-
-    <section class="panel" id="missionInfoPanel"></section>
-
-    <section class="panel" id="cardsPanel"></section>
   </aside>
 
   <main class="stage">
@@ -79,8 +117,8 @@
 </section>
 
 <footer class="site-footer">
-  Terrain rules and mission structure adapted from Atomic Mass Games' Star Wars: Legion Core Rulebook (eff. 4.21.2026)
-  and Recon Rulebook (eff. 4.30.2025). Map layouts are a fair, symmetric approximation of the official Battle Cards —
+  Terrain rules and mission structure adapted from Atomic Mass Games' Star Wars: Legion Core Rulebook (eff. 4.21.2026),
+  Recon Rulebook (eff. 4.30.2025) and Terrain Layout Cards (DOC62, eff. 07.2026). Map layouts are a fair, symmetric approximation of the official Battle Cards —
   not pixel-exact reproductions. Generic terrain placement (Large/Medium/Small/Scatter/Barricade) is left to players
   by the rules, which is exactly what this tool generates for you.
 </footer>
