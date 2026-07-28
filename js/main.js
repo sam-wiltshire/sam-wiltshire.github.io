@@ -40,8 +40,10 @@
   const shareUrlInput = document.getElementById("shareUrl");
   const shareHint = document.getElementById("shareHint");
   const analysisPanel = document.getElementById("analysisPanel");
+  const symmetryPanel = document.getElementById("symmetryPanel");
   const measureBtn = document.getElementById("measureBtn");
   const sightBtn = document.getElementById("sightBtn");
+  const symmetryBtn = document.getElementById("symmetryBtn");
   const stageHint = document.getElementById("stageHint");
 
   let lastLayout = null;
@@ -57,6 +59,8 @@
 
   const lockedIds = new Set();
   let showSight = false;
+  let showSymmetry = false;
+  let symmetry = null;
   let measureMode = false;
   let measure = null; // { a, b } in table inches
   let exposure = null;
@@ -215,6 +219,7 @@
     }
     lastLayout = LM.layoutFromPieces(tableSelect.value, missionSelect.value, lastLayout.terrain);
     if (showSight) refreshExposure();
+    if (showSymmetry) refreshSymmetry();
     redraw();
     renderPlacementList(lastLayout);
     updateSelectionHint();
@@ -434,12 +439,53 @@
     `;
   }
 
+  // Symmetry is pure geometry, so unlike the exposure pass it's cheap enough to redo on
+  // every edit — but it's still only computed while the overview is switched on.
+  function refreshSymmetry() {
+    symmetry = showSymmetry && lastLayout ? LM.computeSymmetry(lastLayout) : null;
+    renderSymmetryPanel();
+  }
+
+  function renderSymmetryPanel() {
+    if (!showSymmetry || !symmetry) {
+      symmetryPanel.innerHTML = "";
+      symmetryPanel.style.display = "none";
+      return;
+    }
+    symmetryPanel.style.display = "";
+    const pct = Math.round(symmetry.score * 100);
+    const skew = Math.round(symmetry.halves.skew * 100);
+    const color = pct >= 75 ? "var(--good)" : pct >= 40 ? "var(--warn)" : "var(--bad)";
+    let verdict;
+    if (pct >= 85) verdict = "Near-symmetric — both players face very nearly the same terrain from their own edge.";
+    else if (pct >= 55) verdict = "Loosely symmetric — the same shape of table for both players, with local differences.";
+    else if (pct >= 25) verdict = "Mostly asymmetric — each side has terrain the other doesn't, so flanks won't play alike.";
+    else verdict = "Asymmetric — the two halves are essentially different tables.";
+    const heavier = symmetry.halves.heavier;
+    const skewNote = skew >= 15 && heavier
+      ? ` ${heavier}'s half holds ${skew}% more terrain by footprint.`
+      : "";
+    const worst = symmetry.worst;
+    const worstNote = worst && worst.score < 0.6
+      ? ` Least matched pair: ${TERRAIN_CATEGORIES[worst.a.category].label}, ${worst.offset.toFixed(1)}" out of true.`
+      : "";
+    symmetryPanel.innerHTML = `
+      <h2>Symmetry</h2>
+      <div class="stat-row"><span>Rotational symmetry</span><span class="v" style="color:${color}">${pct}%</span></div>
+      <div class="stat-row"><span>Terrain per half</span><span class="v">${skew}% skew</span></div>
+      <div class="stat-row"><span>Matched pairs</span><span class="v">${symmetry.pairs.filter((p) => !p.self).length}</span></div>
+      <p class="stat-note">${verdict}${skewNote}${worstNote}</p>
+      <p class="stat-note">Dashed outlines on the board show where each piece would sit if the table were turned 180°, so a piece with no outline over it has no counterpart.</p>
+    `;
+  }
+
   function redraw() {
     const res = renderLayout(canvas, lastLayout, viewMode, themeSelect.value, {
       exposure,
       lockedIds,
       measure,
       selectedId: mode === "build" ? selectedId : null,
+      symmetry,
     });
     lastHitRegions = res.regions;
     unproject = res.unproject;
@@ -452,6 +498,7 @@
     tableDimsLabel.textContent = `${lastLayout.mission.name} — ${lastLayout.table.dimsLabel}`;
     updateModeHint();
     refreshExposure();
+    refreshSymmetry();
     redraw();
     if (mode !== "build") renderCoveragePanel(lastLayout);
     renderMissionInfoPanel(lastLayout);
@@ -618,6 +665,7 @@
       // A hand-placed piece is implicitly pinned — a reroll shouldn't undo the move.
       lockedIds.add(piece.id);
       if (showSight) refreshExposure();
+      if (showSymmetry) refreshSymmetry();
       renderPlacementList(lastLayout);
     }
     drag = null;
@@ -752,6 +800,13 @@
     showSight = !showSight;
     sightBtn.classList.toggle("active", showSight);
     refreshExposure();
+    redraw();
+  });
+
+  symmetryBtn.addEventListener("click", () => {
+    showSymmetry = !showSymmetry;
+    symmetryBtn.classList.toggle("active", showSymmetry);
+    refreshSymmetry();
     redraw();
   });
 

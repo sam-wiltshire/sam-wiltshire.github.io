@@ -1140,6 +1140,46 @@ var LM = window.LM || (window.LM = {});
       ctx.restore();
     }
 
+    // Symmetry overview: ghost each piece where it would land if the whole table were turned
+    // 180 degrees. Ghosts sitting on top of real pieces mean the two halves match; a ghost
+    // floating in open ground is a piece the other player hasn't got. Pairs that are badly out
+    // of true get a connector to the partner they were matched with.
+    if (opts.symmetry) {
+      ctx.save();
+      for (const piece of terrain || []) {
+        const cat = LM.TERRAIN_CATEGORIES[piece.category];
+        const ghost = {
+          x: table.length - piece.x,
+          y: table.depth - piece.y,
+          rotation: piece.rotation + 180,
+          category: piece.category,
+        };
+        const pts = LM.pieceCorners(ghost).map((c) => project(c.x, c.y, 0.03));
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = "rgba(150,190,255,0.55)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        pts.slice(1).forEach((p) => ctx.lineTo(p.x, p.y));
+        ctx.closePath();
+        ctx.stroke();
+        void cat;
+      }
+      for (const pair of opts.symmetry.pairs) {
+        if (pair.self || pair.score > 0.6) continue;
+        const from = project(table.length - pair.a.x, table.depth - pair.a.y, 0.03);
+        const to = project(pair.b.x, pair.b.y, 0.03);
+        ctx.setLineDash([]);
+        ctx.strokeStyle = "rgba(225,120,120,0.7)";
+        ctx.lineWidth = 1.25;
+        ctx.beginPath();
+        ctx.moveTo(from.x, from.y);
+        ctx.lineTo(to.x, to.y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
     // Build mode: ring the selected piece and hang a rotate handle off it. The handle sits on
     // the piece's own "up" axis at a fixed distance from its centre, so dragging it round
     // reads as turning the piece. Its screen position goes back to the caller for hit-testing.
